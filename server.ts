@@ -1652,11 +1652,24 @@ if (process.env.NODE_ENV !== 'production') {
     app.use(vite.middlewares);
   });
 } else {
-  const distDir = path.resolve(process.cwd(), 'dist');
-  app.use(express.static(distDir));
-  app.get('/{*splat}', (_req, res) => {
-    res.sendFile(path.join(distDir, 'index.html'));
-  });
+  const possibleDistDirs = [
+    path.resolve(process.cwd(), 'dist'),
+    path.resolve(__dirname, 'dist'),
+    path.resolve(process.cwd(), '../dist'),
+    path.resolve(__dirname, '../dist'),
+  ];
+  const distDir = possibleDistDirs.find((d) => fs.existsSync(d)) || possibleDistDirs[0];
+
+  if (fs.existsSync(distDir)) {
+    app.use(express.static(distDir));
+    app.get('/{*splat}', (req, res, next) => {
+      const indexPath = path.join(distDir, 'index.html');
+      if (fs.existsSync(indexPath)) {
+        return res.sendFile(indexPath);
+      }
+      return next();
+    });
+  }
 }
 
 if (!process.env.VERCEL) {

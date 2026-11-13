@@ -1,5 +1,7 @@
 {
   "version": 2,
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
   "builds": [
     {
       "src": "server.ts",
@@ -7,12 +9,8 @@
     }
   ],
   "routes": [
-    {
-      "handle": "filesystem"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "server.ts"
-    }
+    { "src": "/api/(.*)", "destination": "/server.ts" },
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "destination": "/server.ts" }
   ]
 }
