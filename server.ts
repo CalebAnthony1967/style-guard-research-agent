@@ -1643,14 +1643,15 @@ Provide honest integer scores (0-100) and concise actionable checks.`,
     }
   });
 
-if (process.env.NODE_ENV !== 'production') {
-  import('vite').then(async ({ createServer: createViteServer }) => {
+if (!process.env.VERCEL && process.env.NODE_ENV !== 'production') {
+  const vitePkg = 'vite';
+  import(/* @vite-ignore */ vitePkg).then(async ({ createServer: createViteServer }) => {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  });
+  }).catch(() => {});
 } else {
   const possibleDistDirs = [
     path.resolve(process.cwd(), 'dist'),
