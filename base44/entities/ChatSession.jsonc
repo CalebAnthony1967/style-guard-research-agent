@@ -1,0 +1,68 @@
+{
+  "name": "ChatSession",
+  "type": "object",
+  "properties": {
+    "manuscript_id": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "GENERAL_CHAT",
+        "PAPER_EVALUATION",
+        "CO_PILOT_EDIT",
+        "SEMINAR_FACT_CHECK"
+      ],
+      "enumColors": [
+        "gray",
+        "blue",
+        "purple",
+        "yellow"
+      ]
+    }
+  },
+  "rls": {
+    "create": {
+      "created_by_id": "{{user.id}}"
+    },
+    "read": {
+      "$or": [
+        {
+          "created_by_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "created_by_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "$or": [
+        {
+          "created_by_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,106 @@
+{
+  "name": "KnowledgeRule",
+  "type": "object",
+  "properties": {
+    "source_type": {
+      "type": "string",
+      "enum": [
+        "HOUSE_STYLE_2010",
+        "PP_06_2020",
+        "QMS_CONTROL_FORM",
+        "REPOSITORY"
+      ],
+      "enumColors": [
+        "blue",
+        "purple",
+        "gray",
+        "green"
+      ]
+    },
+    "source_uri": {
+      "type": "string"
+    },
+    "section_category": {
+      "type": "string",
+      "enum": [
+        "LAYOUT_AND_FRONT_MATTER",
+        "STYLE_AND_SPELLING",
+        "TABLES_AND_FIGURES",
+        "CITATIONS_AND_BIBLIOGRAPHY",
+        "POLICY_DRAFTING_RIGOR",
+        "OUTPUT_ALIGNMENT"
+      ],
+      "enumColors": [
+        "gray",
+        "blue",
+        "purple",
+        "green",
+        "yellow",
+        "pink"
+      ]
+    },
+    "rule_identifier": {
+      "type": "string"
+    },
+    "rule_title": {
+      "type": "string"
+    },
+    "rule_content": {
+      "type": "string"
+    },
+    "applicable_paper_types": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "severity_default": {
+      "type": "string",
+      "enum": [
+        "CRITICAL",
+        "WARNING",
+        "INFO"
+      ],
+      "enumColors": [
+        "red",
+        "yellow",
+        "gray"
+      ]
+    },
+    "manual_reference": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "rule_identifier",
+    "rule_title",
+    "rule_content"
+  ],
+  "rls": {
+    "read": {},
+    "create": {
+      "$or": [
+        {
+          "user_condition": {
+            "role": "user"
+          }
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

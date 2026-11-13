@@ -1,0 +1,34 @@
+{
+  "name": "User",
+  "type": "object",
+  "properties": {
+    "kippra_role": {
+      "type": "string",
+      "description": "KIPPRA office held by this account (assigned by an administrator)",
+      "enum": [
+        "RESEARCHER",
+        "HOD",
+        "DIRECTOR",
+        "SEMINAR_PANEL",
+        "EXECUTIVE_DIRECTOR",
+        "DEPUTY_DIRECTOR_KM",
+        "PUBLICATIONS_EDITOR",
+        "ADMIN",
+        "SUPER_ADMIN_VAULT"
+      ],
+      "rls": {
+        "update": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
+    "directorate": {
+      "type": "string"
+    },
+    "department": {
+      "type": "string"
+    }
+  }
+}

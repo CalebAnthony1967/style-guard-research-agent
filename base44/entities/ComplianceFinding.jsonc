@@ -1,0 +1,130 @@
+{
+  "name": "ComplianceFinding",
+  "type": "object",
+  "properties": {
+    "audit_id": {
+      "type": "string"
+    },
+    "manuscript_id": {
+      "type": "string"
+    },
+    "rule_identifier": {
+      "type": "string"
+    },
+    "rule_title": {
+      "type": "string"
+    },
+    "vector_category": {
+      "type": "string",
+      "enum": [
+        "LAYOUT_AND_FRONT_MATTER",
+        "STYLE_AND_SPELLING",
+        "TABLES_AND_FIGURES",
+        "CITATIONS_AND_BIBLIOGRAPHY",
+        "POLICY_DRAFTING_RIGOR",
+        "OUTPUT_ALIGNMENT"
+      ],
+      "enumColors": [
+        "gray",
+        "blue",
+        "purple",
+        "green",
+        "yellow",
+        "pink"
+      ]
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "CRITICAL",
+        "WARNING",
+        "INFO"
+      ],
+      "enumColors": [
+        "red",
+        "yellow",
+        "gray"
+      ]
+    },
+    "issue_detected": {
+      "type": "string"
+    },
+    "original_text_excerpt": {
+      "type": "string"
+    },
+    "suggested_correction": {
+      "type": "string"
+    },
+    "character_start": {
+      "type": "number"
+    },
+    "character_end": {
+      "type": "number"
+    },
+    "page_number": {
+      "type": "number"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "OPEN",
+        "ACCEPTED",
+        "REJECTED"
+      ],
+      "enumColors": [
+        "gray",
+        "green",
+        "red"
+      ]
+    }
+  },
+  "required": [
+    "audit_id",
+    "severity",
+    "issue_detected"
+  ],
+  "rls": {
+    "create": {
+      "created_by_id": "{{user.id}}"
+    },
+    "read": {
+      "$or": [
+        {
+          "created_by_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "user"
+          }
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "created_by_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "user"
+          }
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}
