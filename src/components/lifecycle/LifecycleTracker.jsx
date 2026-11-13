@@ -48,7 +48,7 @@ export default function LifecycleTracker({ control, manuscript, action }) {
     <section className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border p-5">
         <div className="max-w-xl">
-          <p className="eyebrow">Publication lifecycle · KIPPRA/QMS/RPC/2023/03</p>
+          <p className="eyebrow">Publication Review Pathway · Quality Standard</p>
           <h2 className="mt-1 text-lg text-foreground">{phase.title}</h2>
           <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">{phase.description}</p>
           {(manuscript?.department || manuscript?.directorate) && (

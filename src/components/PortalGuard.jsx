@@ -13,7 +13,7 @@ export default function PortalGuard({ role, children }) {
         <LockKeyhole className="mx-auto h-6 w-6 text-muted-foreground" strokeWidth={1.5} />
         <h1 className="mt-4 text-2xl text-foreground">This station is not yours</h1>
         <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
-          Your account holds the {ROLE_LABEL[roleOf(user)] || 'Researcher'} office. The {ROLE_LABEL[role]} portal belongs to a different stage of KIPPRA/QMS/RPC/2023/03.
+          Your account holds the {ROLE_LABEL[roleOf(user)] || 'Researcher'} office. The {ROLE_LABEL[role]} workspace is designated for officers accountable for that stage in the review workflow.
         </p>
         <Link
           to={home.path}

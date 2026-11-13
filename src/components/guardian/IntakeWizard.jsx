@@ -203,7 +203,7 @@ export default function IntakeWizard({ user, onCreated }) {
         <DialogHeader>
           <DialogTitle className="font-display text-2xl">New manuscript intake</DialogTitle>
           <DialogDescription className="text-[12.5px]">
-            Upload your manuscript and Guardian automatically extracts title, series, abstract, sections, and TOR deliverables before running the QMS KIPPRA/QMS/RPC/2023/03 audit.
+            Upload your manuscript and Guardian will automatically scan the title, series, abstract, sections, and policy deliverables before conducting the style compliance review.
           </DialogDescription>
         </DialogHeader>
 

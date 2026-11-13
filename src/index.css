@@ -116,3 +116,56 @@
     background-image: linear-gradient(to right, hsl(var(--brand-burgundy)) 0 28%, hsl(var(--brand-green)) 28% 68%, hsl(var(--brand-navy)) 68% 100%);
   }
 }
+
+@keyframes ambient-drift-1 {
+  0%, 100% {
+    transform: translate(0px, 0px) scale(1);
+  }
+  33% {
+    transform: translate(35px, -25px) scale(1.08);
+  }
+  66% {
+    transform: translate(-25px, 20px) scale(0.95);
+  }
+}
+
+@keyframes ambient-drift-2 {
+  0%, 100% {
+    transform: translate(0px, 0px) scale(1);
+  }
+  33% {
+    transform: translate(-30px, 25px) scale(1.06);
+  }
+  66% {
+    transform: translate(25px, -18px) scale(0.94);
+  }
+}
+
+@keyframes ambient-drift-3 {
+  0%, 100% {
+    transform: translate(0px, 0px) scale(1);
+  }
+  50% {
+    transform: translate(20px, 30px) scale(1.1);
+  }
+}
+
+.animate-ambient-1 {
+  animation: ambient-drift-1 22s ease-in-out infinite alternate;
+}
+
+.animate-ambient-2 {
+  animation: ambient-drift-2 26s ease-in-out infinite alternate;
+}
+
+.animate-ambient-3 {
+  animation: ambient-drift-3 18s ease-in-out infinite alternate;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-ambient-1,
+  .animate-ambient-2,
+  .animate-ambient-3 {
+    animation: none;
+  }
+}
