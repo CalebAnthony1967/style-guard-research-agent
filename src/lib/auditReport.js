@@ -38,7 +38,8 @@ export function buildAuditReport({ manuscript, audit, findings = [], control }) 
   const meta = [
     `Series: ${manuscript?.paper_type || '—'}`,
     `Author: ${manuscript?.owner_name || '—'} (${manuscript?.owner_email || '—'})`,
-    `Department: ${manuscript?.department || '—'}`,
+    `Directorate of origin: ${manuscript?.directorate || '—'}`,
+    `Department of origin: ${manuscript?.department || '—'}`,
     `Review reference: ${audit?.id || '—'}`,
     `Reviewed: ${audit?.created_date ? new Date(audit.created_date).toLocaleString() : '—'}`,
     `Word count: ${audit?.word_count || '—'}`,
@@ -127,7 +128,7 @@ export function buildAuditReport({ manuscript, audit, findings = [], control }) 
   y += 8;
   doc.setFont('times', 'bold');
   doc.setFontSize(12);
-  doc.text('Lifecycle sign-offs', MARGIN, y);
+  doc.text('Lifecycle sign-offs (KIPPRA/QMS/RPC/2023/03)', MARGIN, y);
   y += 6;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
@@ -139,7 +140,7 @@ export function buildAuditReport({ manuscript, audit, findings = [], control }) 
     ['Seminar panel decision', control?.wis_rapporteur, control?.wis_panel_decision],
     ['Authorised for publication', control?.ed_signer, control?.ed_authorization_date],
     ['Received by Knowledge Management', control?.km_signer, control?.km_receipt_date],
-    ['Printing requisitioned', 'Publications Editor', control?.printing_requisition_date],
+    ['Printing requisitioned', control?.typesetting_conducted_by || 'Publications Editor', control?.printing_requisition_date],
   ];
   signoffs.forEach(([label, who, when]) => {
     doc.text(`${label}: ${who || 'not signed'} ${when ? `· ${when}` : ''}`, MARGIN, y);

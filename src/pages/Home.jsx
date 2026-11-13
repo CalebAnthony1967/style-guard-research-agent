@@ -1,392 +1,368 @@
--- ==============================================================================
--- KIPPRA STYLEGUARD: PRODUCTION DDL MIGRATION
--- ==============================================================================
+import { Link } from 'react-router-dom';
+import { motion } from 'framer-motion';
+import { ArrowRight, CheckCircle2, FileSearch, Scale } from 'lucide-react';
+import { useAuth } from '@/lib/AuthContext';
+import { portalForRole, ROLE_LABEL, roleOf, STAGES, loggedInLabel } from '@/lib/portals';
+import PortalGrid from '@/components/home/PortalGrid';
 
--- 1. EXTENSIONS
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
-CREATE EXTENSION IF NOT EXISTS "vector";
+const ARCHITECTURE_STEPS = [
+  {
+    n: '1',
+    name: 'User query / task',
+    role: 'Intake',
+    summary: 'Guided three-step workbench and voice ingress.',
+    points: ['Series, sandbox upload and TOR benchmark', 'Web Audio voice captured and transcribed'],
+  },
+  {
+    n: '3',
+    name: 'LLM — the brain',
+    role: 'Reasoning',
+    summary: 'Guardian Core Reasoner at temperature 0.0.',
+    points: ['Deterministic evaluation harness', 'Cloud open-source model with local switch'],
+  },
+  {
+    n: '4',
+    name: 'Memory — the notebook',
+    role: 'State',
+    summary: 'Threaded session memory and ETag version control.',
+    points: ['Chat thread per manuscript session', 'SHA-256 version hashes prevent race conditions'],
+  },
+  {
+    n: '2',
+    name: 'RAG — the library',
+    role: 'Retrieval',
+    summary: 'Hybrid dense and sparse retrieval over KIPPRA knowledge.',
+    points: [
+      'House Style Manual 2010 · 57 checklist points',
+      'PP/06/2020 policy drafting guidelines',
+      'Knowledge-base rules with relevance scoring',
+    ],
+  },
+  {
+    n: '6',
+    name: 'MCP — universal adapter',
+    role: 'Protocol',
+    summary: 'One standard interface between the reasoner and every capability.',
+    points: ['QMS control gateway', 'Repository harvester, compliance linter, track-changes'],
+  },
+  {
+    n: '5',
+    name: 'Tools — the hands',
+    role: 'Execution',
+    summary: 'Deterministic linting, citation parity and OpenXML patching.',
+    points: [
+      '-ise / -ize, "shall", table numerals, per cent',
+      '1:1 citation-to-bibliography parity',
+      'Word track-changes diff generation',
+    ],
+  },
+  {
+    n: '7',
+    name: 'A2A — communication line',
+    role: 'Orchestration',
+    summary: 'Typed shared state passed between agents.',
+    points: ['Event bus with findings and hand-offs', 'Every agent step recorded for audit'],
+  },
+  {
+    n: '8',
+    name: 'Multi-agent system — the team',
+    role: 'Pipeline',
+    summary: 'Research, planning, execution and review agents in a DAG.',
+    points: [
+      'Research harvests precedent and style rules',
+      'Planning builds the audit checklist',
+      'Execution lints and drafts revisions',
+      'Review scores and quality-gates at 80%',
+    ],
+  },
+  {
+    n: '9',
+    name: 'Final response / action',
+    role: 'Delivery',
+    summary: 'Track-changes export, scorecard, QMS control card and voice reply.',
+    points: ['Compliance scorecard with 9-qualities radar', 'Digital control card with human sign-off'],
+  },
+];
 
--- 2. USERS & CLEARANCES
-CREATE TABLE IF NOT EXISTS public.users (
-    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-    email VARCHAR(255) UNIQUE NOT NULL,
-    full_name VARCHAR(255) NOT NULL,
-    role VARCHAR(50) NOT NULL CHECK (role IN (
-        'RESEARCHER', 'HOD', 'DIRECTOR', 'SEMINAR_PANEL',
-        'EXECUTIVE_DIRECTOR', 'DEPUTY_DIRECTOR_KM', 'PUBLICATIONS_EDITOR',
-        'ADMIN', 'SUPER_ADMIN_VAULT'
-    )),
-    directorate VARCHAR(150) NOT NULL,
-    department VARCHAR(150) NOT NULL,
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+const PRINCIPLES = [
+  {
+    icon: Scale,
+    title: 'Human sign-off at every gate',
+    body: 'Guardian evaluates and recommends. Only an officer of the Institute can sign a control-form row.',
+  },
+  {
+    icon: FileSearch,
+    title: 'Explainable by construction',
+    body: 'Every deduction traces to a rule code, a character range and the guideline that produced it.',
+  },
+  {
+    icon: CheckCircle2,
+    title: 'Append-only audit trail',
+    body: 'Each action is hash-chained with its predecessor, so records cannot be quietly rewritten.',
+  },
+];
 
--- 3. DOCUMENTS TABLE
-CREATE TABLE IF NOT EXISTS public.documents (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE RESTRICT,
-    title VARCHAR(500) NOT NULL,
-    paper_type VARCHAR(100) NOT NULL CHECK (paper_type IN (
-        'Discussion Paper', 'Kenya Economic Report', 'Policy Brief', 'Policy Monitor',
-        'Special Paper', 'Policy Memoranda', 'Policy Paper', 'Working Paper',
-        'Research Paper', 'Occasional Paper', 'Media Article'
-    )),
-    original_filename VARCHAR(255) NOT NULL,
-    mime_type VARCHAR(100) NOT NULL,
-    storage_path VARCHAR(1024) NOT NULL,
-    file_hash_sha256 CHAR(64) NOT NULL,
-    expected_research_outputs TEXT NOT NULL,
-    tor_storage_path VARCHAR(1024),
-    allowed_roles VARCHAR[] DEFAULT '{"RESEARCHER", "HOD", "DIRECTOR", "ADMIN"}',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+function ArchTimeline() {
+  return (
+    <ol className="relative mt-10 space-y-0">
+      {ARCHITECTURE_STEPS.map((step, index) => (
+        <motion.li
+          key={step.n}
+          initial={{ opacity: 0, y: 14 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, margin: '-60px' }}
+          transition={{ duration: 0.45, delay: index * 0.04, ease: [0.22, 1, 0.36, 1] }}
+          className="group relative grid grid-cols-[auto_1fr] gap-5 pb-7 last:pb-0"
+        >
+          <div className="relative flex flex-col items-center">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-border bg-card font-mono text-sm text-primary shadow-[0_1px_0_hsl(var(--border))] transition-colors group-hover:border-primary/40">
+              {step.n}
+            </span>
+            {index < ARCHITECTURE_STEPS.length - 1 && (
+              <span
+                className="mt-1 w-px flex-1 bg-gradient-to-b from-border via-border to-transparent"
+                aria-hidden="true"
+              />
+            )}
+          </div>
+          <div className="min-w-0 pb-1">
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <h3 className="text-lg leading-tight text-foreground">{step.name}</h3>
+              <span className="rounded-full bg-secondary px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                {step.role}
+              </span>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">{step.summary}</p>
+            <ul className="mt-2 flex flex-wrap gap-x-5 gap-y-1">
+              {step.points.map((pt) => (
+                <li key={pt} className="text-[12.5px] text-foreground/70">
+                  <span className="mr-1.5 text-primary/40">—</span>
+                  {pt}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </motion.li>
+      ))}
+    </ol>
+  );
+}
 
--- 4. DOCUMENT VERSIONS (OPTIMISTIC CONCURRENCY CONTROL)
-CREATE TABLE IF NOT EXISTS public.document_versions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    document_id UUID NOT NULL REFERENCES public.documents(id) ON DELETE CASCADE,
-    version_number INT NOT NULL,
-    version_hash_sha256 CHAR(64) NOT NULL,
-    storage_path VARCHAR(1024) NOT NULL,
-    diff_ast_patch JSONB,
-    change_summary TEXT,
-    created_by UUID NOT NULL REFERENCES public.users(id),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT uq_doc_version UNIQUE (document_id, version_number)
-);
+export default function Home() {
+  const { user } = useAuth();
+  const activeRole = roleOf(user);
+  const portal = portalForRole(activeRole);
 
--- 5. QMS CONTROL LIFECYCLE (KIPPRA/QMS/RPC/2023/03 Revision 3)
-CREATE TABLE IF NOT EXISTS public.qms_publication_control (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    document_id UUID NOT NULL REFERENCES public.documents(id) ON DELETE CASCADE,
-    form_ref_no VARCHAR(100) DEFAULT 'KIPPRA/QMS/RPC/2023/03',
-    revision_no INT DEFAULT 3,
-    current_stage VARCHAR(100) NOT NULL CHECK (current_stage IN (
-        'DRAFT_SUBMITTED', 'CONCEPT_PRESENTED_DEPT', 'DRAFT_PRESENTED_DEPT',
-        'DIRECTOR_REVIEW_COMPLETED', 'WIS_SCHEDULED', 'WIS_COMPLETED',
-        'DECISION_COMMUNICATED', 'EXECUTIVE_DIRECTOR_AUTHORIZED',
-        'KM_RECEIVED', 'EDITORIAL_FIRST_TYPESETTING', 'EDITORIAL_SECOND_REVIEW',
-        'AUTHOR_FEEDBACK_CYCLE', 'FINAL_CORRECTIONS_INCORPORATED', 'PRINTING_REQUISITIONED'
-    )),
-    concept_presentation_date DATE,
-    concept_hod_signoff_user UUID REFERENCES public.users(id),
-    concept_hod_signed_at TIMESTAMP WITH TIME ZONE,
-    draft_presentation_date DATE,
-    draft_hod_signoff_user UUID REFERENCES public.users(id),
-    draft_hod_signed_at TIMESTAMP WITH TIME ZONE,
-    director_receipt_date DATE,
-    director_review_completed_date DATE,
-    director_signoff_user UUID REFERENCES public.users(id),
-    director_signed_at TIMESTAMP WITH TIME ZONE,
-    wis_presentation_date DATE,
-    wis_director_signoff_user UUID REFERENCES public.users(id),
-    wis_panel_decision VARCHAR(50) CHECK (wis_panel_decision IN (
-        'SUBMIT_FOR_PUBLICATION', 
-        'REVISE_SUBMIT_MINOR', 
-        'REVISE_REPRESENT_MAJOR'
-    )),
-    decision_communicated_date DATE,
-    ed_authorization_date DATE,
-    ed_signoff_user UUID REFERENCES public.users(id),
-    km_receipt_date DATE,
-    km_signoff_user UUID REFERENCES public.users(id),
-    typesetting_commenced DATE,
-    typesetting_completed DATE,
-    typesetting_conducted_by VARCHAR(255),
-    editorial_comments_sent_date DATE,
-    editorial_feedback_received_date DATE,
-    final_corrections_incorporated_date DATE,
-    printing_requisition_date DATE,
-    is_fully_completed BOOLEAN DEFAULT FALSE,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+  return (
+    <div className="min-h-screen bg-background">
+      <header className="sticky top-0 z-30 border-b border-border/70 bg-background/85 backdrop-blur-md">
+        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5 sm:px-8">
+          <div className="flex items-center gap-3">
+            <span className="flex h-9 w-9 items-center justify-center rounded-md bg-primary font-display text-lg text-primary-foreground">
+              G
+            </span>
+            <div className="leading-tight">
+              <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">
+                KIPPRA StyleGuard
+              </p>
+              <p className="text-sm font-medium text-foreground">Guardian</p>
+            </div>
+          </div>
 
--- 6. HYBRID KNOWLEDGE BASE (1536-DIM VECTOR FOR HNSW + BM25)
-CREATE TABLE IF NOT EXISTS public.kippra_knowledge_base (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    source_type VARCHAR(100) NOT NULL,
-    source_uri VARCHAR(1024) NOT NULL,
-    section_category VARCHAR(100) NOT NULL,
-    rule_identifier VARCHAR(100) NOT NULL,
-    rule_title VARCHAR(255) NOT NULL,
-    rule_content TEXT NOT NULL,
-    applicable_paper_types VARCHAR[] NOT NULL,
-    allowed_roles VARCHAR[] DEFAULT '{"ALL"}',
-    embedding vector(1536), -- Truncated MRL text-embedding-3-large or text-embedding-3-small
-    tsv_content tsvector,
-    metadata JSONB,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+          <div className="flex items-center gap-5">
+            <Link to="/guidelines" className="hidden text-xs text-muted-foreground hover:text-foreground sm:inline">
+              Guidelines
+            </Link>
+            <span className="hidden text-xs font-medium text-foreground sm:inline">
+              {loggedInLabel(user)}
+            </span>
+            <Link
+              to={portal.path}
+              className="inline-flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-[13px] font-medium text-primary-foreground transition-opacity hover:opacity-90"
+            >
+              Open my portal <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          </div>
+        </div>
+      </header>
 
--- Ensure tsvector is automatically updated on insert/update
-CREATE OR REPLACE FUNCTION kippra_kb_tsv_update() RETURNS trigger AS $$
-BEGIN
-    new.tsv_content := to_tsvector('english', coalesce(new.rule_title, '') || ' ' || coalesce(new.rule_content, ''));
-    RETURN new;
-END
-$$ LANGUAGE plpgsql;
+      <main>
+        <section className="relative overflow-hidden border-b border-border/70">
+          <div className="pointer-events-none absolute inset-0 opacity-[0.5]" aria-hidden="true" />
+          <div className="relative mx-auto grid max-w-6xl gap-12 px-5 py-16 sm:px-8 lg:grid-cols-[1.1fr_0.9fr] lg:py-24">
+            <div>
+              <motion.p
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5 }}
+                className="eyebrow"
+              >
+                Nine-component agent system · QMS KIPPRA/QMS/RPC/2023/03
+              </motion.p>
+              <motion.h1
+                initial={{ opacity: 0, y: 14 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.6, delay: 0.06, ease: [0.22, 1, 0.36, 1] }}
+                className="mt-5 text-[2.6rem] leading-[1.05] text-foreground sm:text-6xl"
+              >
+                Manuscript compliance,
+                <br />
+                governed end to end.
+              </motion.h1>
+              <motion.p
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.6, delay: 0.18 }}
+                className="mt-6 max-w-xl text-[15px] leading-relaxed text-muted-foreground"
+              >
+                Guardian lints every KIPPRA manuscript against the 57-point House Style and PP/06/2020, retrieves
+                precedent from the E-Repository, drafts native Word revisions, and holds each paper at the 80% threshold
+                until a human signs it forward.
+              </motion.p>
+              <div className="mt-8 flex flex-wrap items-center gap-3">
+                <Link
+                  to={portal.path}
+                  className="inline-flex items-center gap-2 rounded-full bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
+                >
+                  Enter {portal.label} portal <ArrowRight className="h-4 w-4" />
+                </Link>
+                <a
+                  href="#architecture"
+                  className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-2.5 text-sm text-foreground transition-colors hover:bg-secondary"
+                >
+                  See the architecture
+                </a>
+              </div>
+              <dl className="mt-12 grid max-w-lg grid-cols-2 gap-y-6 border-t border-border/80 pt-6 sm:grid-cols-4 sm:gap-4">
+                {[
+                  ['57', 'checklist points'],
+                  ['14', 'QMS stages'],
+                  ['9', 'policy qualities'],
+                  ['80%', 'routing gate'],
+                ].map(([value, label]) => (
+                  <div key={label}>
+                    <dt className="font-display text-3xl leading-none text-foreground tabular">{value}</dt>
+                    <dd className="mt-1.5 text-[11px] uppercase tracking-[0.12em] text-muted-foreground">{label}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
 
-CREATE OR REPLACE TRIGGER trg_kippra_kb_tsv
-BEFORE INSERT OR UPDATE ON public.kippra_knowledge_base
-FOR EACH ROW EXECUTE FUNCTION kippra_kb_tsv_update();
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.7, delay: 0.2, ease: [0.22, 1, 0.36, 1] }}
+              className="self-start rounded-xl border border-border bg-card p-6 shadow-[0_18px_50px_-32px_hsl(205_45%_12%/0.5)]"
+            >
+              <div className="flex items-start justify-between">
+                <div>
+                  <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                    Research &amp; Publications Control Form
+                  </p>
+                  <p className="mt-1 font-display text-xl text-foreground">KIPPRA/QMS/RPC/2023/03</p>
+                </div>
+                <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
+                  Rev 3
+                </span>
+              </div>
 
-CREATE INDEX IF NOT EXISTS idx_kb_embedding ON public.kippra_knowledge_base USING hnsw (embedding vector_cosine_ops);
-CREATE INDEX IF NOT EXISTS idx_kb_tsv ON public.kippra_knowledge_base USING gin (tsv_content);
-CREATE INDEX IF NOT EXISTS idx_kb_paper_types ON public.kippra_knowledge_base USING gin (applicable_paper_types);
+              <div className="mt-6">
+                <div className="flex items-end justify-between">
+                  <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Lifecycle</p>
+                  <p className="font-mono text-[10px] text-muted-foreground">14 stages</p>
+                </div>
+                <div className="mt-2 flex h-9 items-end gap-1">
+                  {STAGES.map((stage, i) => (
+                    <span
+                      key={stage.key}
+                      title={stage.label}
+                      className="flex-1 rounded-sm bg-secondary"
+                      style={{ height: `${34 + ((i * 13) % 46)}%` }}
+                    />
+                  ))}
+                </div>
+              </div>
 
--- 7. COMPLIANCE AUDITS & FINDINGS
-CREATE TABLE IF NOT EXISTS public.compliance_audits (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    document_id UUID NOT NULL REFERENCES public.documents(id) ON DELETE CASCADE,
-    version_id UUID NOT NULL REFERENCES public.document_versions(id) ON DELETE CASCADE,
-    overall_score NUMERIC(5, 2) NOT NULL,
-    house_style_score NUMERIC(5, 2) NOT NULL,
-    policy_rigor_score NUMERIC(5, 2) NOT NULL,
-    output_alignment_score NUMERIC(5, 2) NOT NULL,
-    audit_status VARCHAR(50) NOT NULL CHECK (audit_status IN ('QUEUED', 'PROCESSING', 'COMPLETED', 'FAILED')),
-    can_route_to_hod BOOLEAN DEFAULT FALSE,
-    executive_summary TEXT,
-    executed_by UUID NOT NULL REFERENCES public.users(id),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+              <div className="mt-6 space-y-3 border-t border-border/80 pt-5 text-[13px]">
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Compliance gate</span>
+                  <span className="font-mono text-foreground">&ge; 80% → HOD</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Linter mode</span>
+                  <span className="font-mono text-foreground">deterministic</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Sign-off</span>
+                  <span className="font-mono text-foreground">human, per row</span>
+                </div>
+              </div>
 
-CREATE TABLE IF NOT EXISTS public.compliance_findings (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    audit_id UUID NOT NULL REFERENCES public.compliance_audits(id) ON DELETE CASCADE,
-    rule_identifier VARCHAR(100),
-    vector_category VARCHAR(50) NOT NULL CHECK (vector_category IN (
-        'LAYOUT_AND_FRONT_MATTER', 'STYLE_AND_SPELLING', 'TABLES_AND_FIGURES',
-        'CITATIONS_AND_BIBLIOGRAPHY', 'POLICY_DRAFTING_RIGOR', 'OUTPUT_ALIGNMENT'
-    )),
-    severity VARCHAR(20) NOT NULL CHECK (severity IN ('CRITICAL', 'WARNING', 'INFO')),
-    issue_detected TEXT NOT NULL,
-    original_text_excerpt TEXT,
-    suggested_correction TEXT,
-    page_number INT,
-    character_range INT[],
-    status VARCHAR(50) DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'ACCEPTED', 'REJECTED'))
-);
+              <div className="mt-6 rounded-lg bg-secondary/70 p-4">
+                <p className="text-[12.5px] leading-relaxed text-foreground/80">
+                  “A paper does not advance because the model is confident. It advances because an officer read the
+                  findings and signed.”
+                </p>
+                <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                  Guardian operating principle
+                </p>
+              </div>
+            </motion.div>
+          </div>
+        </section>
 
--- 8. CHAT SESSIONS & MESSAGES
-CREATE TABLE IF NOT EXISTS public.chat_sessions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
-    document_id UUID REFERENCES public.documents(id) ON DELETE SET NULL,
-    current_mode VARCHAR(50) NOT NULL CHECK (current_mode IN ('GENERAL_CHAT', 'PAPER_EVALUATION', 'CO_PILOT_EDIT')),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+        <section id="architecture" className="mx-auto max-w-6xl px-5 py-16 sm:px-8 lg:py-20">
+          <div className="flex flex-wrap items-end justify-between gap-4 border-b border-border/70 pb-5">
+            <div>
+              <p className="eyebrow">The system</p>
+              <h2 className="mt-3 text-3xl text-foreground sm:text-4xl">How StyleGuard works</h2>
+            </div>
+            <p className="max-w-md text-[13px] leading-relaxed text-muted-foreground">
+              One-to-one mapping to the nine-component architecture: intake, brain and memory, library, adapter, tools,
+              event bus, agent team and final verified artifact.
+            </p>
+          </div>
+          <ArchTimeline />
+        </section>
 
-CREATE TABLE IF NOT EXISTS public.chat_messages (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    session_id UUID NOT NULL REFERENCES public.chat_sessions(id) ON DELETE CASCADE,
-    sender VARCHAR(20) NOT NULL CHECK (sender IN ('USER', 'AGENT', 'SYSTEM')),
-    content TEXT NOT NULL,
-    mcp_tool_calls JSONB,
-    ui_visualizations JSONB,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+        <section className="border-y border-border/70 bg-card/60">
+          <div className="mx-auto max-w-6xl px-5 py-16 sm:px-8 lg:py-20">
+            <div className="flex flex-wrap items-end justify-between gap-4">
+              <div>
+                <p className="eyebrow">Nine portals</p>
+                <h2 className="mt-3 text-3xl text-foreground sm:text-4xl">One per accountable role</h2>
+              </div>
+              <p className="max-w-md text-[13px] leading-relaxed text-muted-foreground">
+                Each officer sees only their station in the lifecycle. Access is resolved from your assigned role, so a
+                departmental in-tray is never mixed with a directorate queue.
+              </p>
+            </div>
+            <PortalGrid activeRole={activeRole} />
+          </div>
+        </section>
 
--- 9. IMMUTABLE WORM AUDIT LOGS
-CREATE TABLE IF NOT EXISTS public.system_audit_logs (
-    id BIGSERIAL PRIMARY KEY,
-    user_id UUID,
-    action_type VARCHAR(100) NOT NULL,
-    ip_address INET NOT NULL,
-    payload_hash CHAR(64) NOT NULL,
-    details JSONB NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON public.system_audit_logs(created_at);
+        <section className="mx-auto max-w-6xl px-5 py-16 sm:px-8 lg:py-20">
+          <div className="grid gap-px overflow-hidden rounded-xl border border-border bg-border md:grid-cols-3">
+            {PRINCIPLES.map((item) => {
+              const Icon = item.icon;
+              return (
+                <div key={item.title} className="bg-background p-6">
+                  <Icon className="h-5 w-5 text-primary" strokeWidth={1.5} />
+                  <h3 className="mt-4 text-lg text-foreground">{item.title}</h3>
+                  <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">{item.body}</p>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      </main>
 
--- Prevent update/delete on audit logs (True WORM compliance)
-CREATE OR REPLACE FUNCTION prevent_audit_log_mutation() RETURNS trigger AS $$
-BEGIN
-    RAISE EXCEPTION 'System audit logs are immutable and cannot be updated or deleted.';
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE TRIGGER trg_audit_log_immutability
-BEFORE UPDATE OR DELETE ON public.system_audit_logs
-FOR EACH ROW EXECUTE FUNCTION prevent_audit_log_mutation();
-
--- 10. HYBRID RETRIEVAL RPC FUNCTION
-CREATE OR REPLACE FUNCTION match_kippra_rules(
-    query_embedding vector(1536),
-    query_text text,
-    target_paper_type text,
-    match_count int
-)
-RETURNS TABLE (
-    id uuid,
-    rule_identifier varchar,
-    rule_title varchar,
-    rule_content text,
-    section_category varchar,
-    combined_score float
-)
-LANGUAGE sql STABLE AS $$
-    SELECT 
-        id, 
-        rule_identifier, 
-        rule_title, 
-        rule_content,
-        section_category,
-        ((1 - (embedding <=> query_embedding)) * 0.70 + 
-         ts_rank_cd(tsv_content, plainto_tsquery('english', query_text)) * 0.30)::float AS combined_score
-    FROM public.kippra_knowledge_base
-    WHERE applicable_paper_types @> ARRAY[target_paper_type]
-       OR applicable_paper_types @> ARRAY['ALL']
-    ORDER BY combined_score DESC
-    LIMIT match_count;
-$$;
-
-3. ROW LEVEL SECURITY (RLS) & ACCESS CONTROL
-
-Enable RLS on all tables and apply strict security boundaries:
-
-ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.documents ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.document_versions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.qms_publication_control ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.kippra_knowledge_base ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.compliance_audits ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.compliance_findings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.chat_sessions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.chat_messages ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.system_audit_logs ENABLE ROW LEVEL SECURITY;
-
--- Knowledge base is readable by all authenticated users
-CREATE POLICY "Allow authenticated read of KB" 
-ON public.kippra_knowledge_base FOR SELECT TO authenticated USING (true);
-
--- Researchers manage their own documents; Supervisors/HODs view department papers
-CREATE POLICY "Users access permitted documents" 
-ON public.documents FOR ALL TO authenticated 
-USING (
-    user_id = auth.uid() OR 
-    EXISTS (
-        SELECT 1 FROM public.users 
-        WHERE users.id = auth.uid() 
-        AND users.role IN ('HOD', 'DIRECTOR', 'SEMINAR_PANEL', 'EXECUTIVE_DIRECTOR', 'ADMIN')
-    )
-);
-
--- QMS Control Form visible to document owners and review chain
-CREATE POLICY "QMS workflow access" 
-ON public.qms_publication_control FOR ALL TO authenticated 
-USING (
-    EXISTS (
-        SELECT 1 FROM public.documents 
-        WHERE documents.id = qms_publication_control.document_id 
-        AND (documents.user_id = auth.uid() OR EXISTS (
-            SELECT 1 FROM public.users 
-            WHERE users.id = auth.uid() 
-            AND users.role IN ('HOD', 'DIRECTOR', 'SEMINAR_PANEL', 'EXECUTIVE_DIRECTOR', 'PUBLICATIONS_EDITOR', 'ADMIN')
-        ))
-    )
-);
-
--- Append-only policy for system audit logs
-CREATE POLICY "Allow system insert into audit logs" 
-ON public.system_audit_logs FOR INSERT TO authenticated WITH CHECK (true);
-
-CREATE POLICY "Allow admins to read audit logs" 
-ON public.system_audit_logs FOR SELECT TO authenticated 
-USING (
-    EXISTS (
-        SELECT 1 FROM public.users 
-        WHERE users.id = auth.uid() AND users.role IN ('ADMIN', 'SUPER_ADMIN_VAULT')
-    )
-);
-
-4. SUPABASE STORAGE BUCKETS SETUP
-
-Using the SUPABASE_SERVICE_ROLE_KEY or Supabase Storage API, programmatically
-provision the following private storage buckets:
-
-1.  manuscripts: Stores uploaded original files (.docx, .pdf, .zip, .xlsx).
-2.  revisions: Stores patched .docx files containing native Word Track Changes.
-3.  compliance-reports: Stores compiled PDF and DOCX evaluation scorecards.
-4.  tor-benchmarks: Stores uploaded terms-of-reference and expected research
-    outputs.
-5.  kippra-e-repository: Stores ingested guidelines and harvested publications.
-
--- Storage bucket initialization (via Storage schema)
-INSERT INTO storage.buckets (id, name, public) 
-VALUES 
-    ('manuscripts', 'manuscripts', false),
-    ('revisions', 'revisions', false),
-    ('compliance-reports', 'compliance-reports', false),
-    ('tor-benchmarks', 'tor-benchmarks', false),
-    ('kippra-e-repository', 'kippra-e-repository', false)
-ON CONFLICT (id) DO NOTHING;
-
-5. SEED INITIAL KNOWLEDGE BASE & TEST PROFILES
-
-Execute the following seed query to ground Guardian in KIPPRA’s core rules and
-initialize test profiles for all roles:
-
--- 1. SEED CORE RULES INTO KNOWLEDGE BASE
-INSERT INTO public.kippra_knowledge_base 
-    (source_type, source_uri, section_category, rule_identifier, rule_title, rule_content, applicable_paper_types)
-VALUES 
-    (
-        'HOUSE_STYLE_2010', 'House_Style_Manual_2010.pdf', 'STYLE_AND_SPELLING', 
-        'KIPPRA-HS-RULE-01', 'Oxford -ize Default and 31 -ise Exceptions', 
-        'KIPPRA uses British English with the Oxford -ize spelling by default (e.g., organize, standardize, utilize). However, 31 verbs retain -ise: advertise, advise, analyse, apprise, chastise, comprise, compromise, demise, despise, devise, disfranchise, disguise, enfranchise, enterprise, excise, exercise, exorcise, improvise, incise, paralyse, premise, prise, promise, raise, revise, rise, arise, supervise, surmise, surprise, televise.', 
-        ARRAY['ALL']
-    ),
-    (
-        'HOUSE_STYLE_2010', 'House_Style_Manual_2010.pdf', 'TABLES_AND_FIGURES', 
-        'KIPPRA-HS-CHECKLIST-42', 'Table Number Thousands Separators', 
-        'In tables, numbers consisting of four or more figures must use spaces instead of commas (e.g., 1 405 724 not 1,405,724). Blanks must be populated with n.a. (data not available) or – (nil/negligible).', 
-        ARRAY['ALL']
-    ),
-    (
-        'POLICY_GUIDELINES_PP062020', 'PP_06_2020.pdf', 'POLICY_DRAFTING_RIGOR', 
-        'PP062020-PRIN-03', 'Prohibition of Shall in Policy Statements', 
-        'Policy is an authoritative decision of government, not an intention or promise. Do not use "shall" in policy statements. Use active voice with "will", "must", or "is responsible for".', 
-        ARRAY['Policy Paper', 'Policy Memoranda', 'Policy Brief', 'Special Paper']
-    ),
-    (
-        'POLICY_GUIDELINES_PP062020', 'PP_06_2020.pdf', 'POLICY_DRAFTING_RIGOR', 
-        'PP062020-PRIN-08', 'Long-Range 15-Year Planning Horizon', 
-        'Public policy documents must take a long-range, futuristic perspective exceeding 15 years (e.g., Kenya Vision 2030). Scopes of 4 to 6 years define Medium-Term Development Plans (MTPs), not long-range public policies.', 
-        ARRAY['Policy Paper', 'Policy Memoranda']
-    ),
-    (
-        'POLICY_GUIDELINES_PP062020', 'PP_06_2020.pdf', 'CABINET_MEMO', 
-        'PP062020-APP-02', 'Mandatory 7-Part Cabinet Memo Structure', 
-        'Cabinet Memoranda must adhere strictly to the 7-part format: Part 1: Purpose/Objectives (For Decision vs For Information); Part 2: Background Information; Part 3: Analysis of the Problem; Part 4: Options and the Way Forward; Part 5: Financial Implications (National Treasury concurrence); Part 6: Legal Implications (Attorney General concurrence); Part 7: Request to the Cabinet.', 
-        ARRAY['Policy Memoranda']
-    )
-ON CONFLICT DO NOTHING;
-
-6. CLIENT INTEGRATION & CONNECTION HANDSHAKE
-
-In the frontend application, instantiate the Supabase client using @supabase/ssr
-or @supabase/supabase-js:
-
-// lib/supabaseClient.ts
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY!;
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
-Ensure all file uploads, intake form submissions, and QMS status transitions
-write directly to these tables. Do not use mock handlers or local storage.
-
-7. EXECUTION DIRECTIVE
-
-Connect to the remote Supabase project now. Apply the DDL migration, verify
-extension activations (uuid-ossp, pgcrypto, vector), set up storage buckets and
-RLS policies, seed the initial knowledge base rules, and verify database
-connectivity. Build a fully functioning backend integration.
-
-
-***
+      <footer className="border-t border-border/70">
+        <div className="mx-auto flex max-w-6xl flex-col gap-2 px-5 py-8 text-[11.5px] text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-8">
+          <p>KIPPRA StyleGuard · Guardian multi-agent compliance system</p>
+          <p className="font-mono">House Style Manual 2010 · PP/06/2020 · QMS Rev 3</p>
+        </div>
+      </footer>
+    </div>
+  );
+}

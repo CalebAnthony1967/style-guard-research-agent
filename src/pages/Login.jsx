@@ -1,9 +1,10 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
-import { loginWithMfa } from "@/lib/authMfa";
-import { signInWithProvider } from "@/lib/authMfaFlow";
-import MfaFlow from "@/components/MfaFlow";
-import { MfaScreen } from "@/components/MfaParts";
+import { supabase } from "@/lib/supabaseClient";
+import { apiFetch } from "@/lib/db";
+// MFA commented out per password-only login policy:
+// import MfaFlow from "@/components/MfaFlow";
+// import { MfaScreen } from "@/components/MfaParts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,21 +18,36 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [mfaChallenge, setMfaChallenge] = useState(null);
-  // Post-login destination (e.g. the MCP OAuth consent page sends users here
-  // with returnTo so the grant flow can resume). Same-origin paths only.
+  // const [mfaChallenge, setMfaChallenge] = useState(null);
   const returnTo = safeReturnTo();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
+    if (!supabase) {
+      setError("Authentication service is not configured.");
+      return;
+    }
     setLoading(true);
     try {
-      const result = await loginWithMfa(email, password);
-      if (result.mfa_required) {
-        setMfaChallenge(result);
-        return;
-      }
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+      if (signInError) throw signInError;
+
+      // MFA 2FA challenge commented out so sign-in uses password only:
+      // const { data: aalData } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+      // if (aalData?.nextLevel === "aal2" && aalData?.currentLevel !== "aal2") {
+      //   const { data: factors } = await supabase.auth.mfa.listFactors();
+      //   const totpFactor = (factors?.totp || []).find((f) => f.status === "verified");
+      //   if (totpFactor) {
+      //     setMfaChallenge({ factorId: totpFactor.id, email: data.user?.email || email });
+      //     return;
+      //   }
+      // }
+
+      await apiFetch("/api/auth/profile", { method: "POST", body: {} }).catch(() => {});
       window.location.href = returnTo;
     } catch (err) {
       setError(err.message || "Invalid email or password");
@@ -41,21 +57,39 @@ export default function Login() {
   };
 
   const handleGoogle = async () => {
-    try { await signInWithProvider("google", returnTo); }
-    catch (err) { setError(err.message || 'Unable to sign in with Google'); }
+    if (!supabase) {
+      setError("Authentication service is not configured.");
+      return;
+    }
+    try {
+      const { error: oauthErr } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: window.location.origin + returnTo,
+        },
+      });
+      if (oauthErr) throw oauthErr;
+    } catch (err) {
+      setError(err.message || "Unable to sign in with Google");
+    }
   };
 
-  // The second sign-in step (authenticator app or text message) replaces the whole page.
-  if (mfaChallenge) return <MfaScreen><MfaFlow challenge={mfaChallenge} returnTo={returnTo} /></MfaScreen>;
+  // if (mfaChallenge) {
+  //   return (
+  //     <MfaScreen>
+  //       <MfaFlow challenge={mfaChallenge} returnTo={returnTo} />
+  //     </MfaScreen>
+  //   );
+  // }
 
   return (
     <AuthLayout
       icon={LogIn}
       title="Welcome back"
-      subtitle="Log in to your account"
+      subtitle="Log in to your KIPPRA StyleGuard account"
       footer={
         <>
-          Don't have an account?{" "}
+          Don&apos;t have an account?{" "}
           <Link
             to={"/register" + (returnTo !== "/" ? "?returnTo=" + encodeURIComponent(returnTo) : "")}
             className="text-primary font-medium hover:underline"
@@ -69,6 +103,7 @@ export default function Login() {
         variant="outline"
         className="w-full h-12 text-sm font-medium mb-6"
         onClick={handleGoogle}
+        type="button"
       >
         <GoogleIcon className="w-5 h-5 mr-2" />
         Continue with Google
@@ -99,7 +134,7 @@ export default function Login() {
               type="email"
               autoComplete="email"
               autoFocus
-              placeholder="you@example.com"
+              placeholder="you@kippra.or.ke"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="pl-10 h-12"

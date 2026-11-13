@@ -1,4 +1,5 @@
-import { Download, FileCheck2, FileText, GitCompare } from 'lucide-react';
+import { useState } from 'react';
+import { Download, FileCheck2, FileText, GitCompare, Loader2, Sparkles } from 'lucide-react';
 import { downloadTrackedDocx } from '@/lib/docxTrack';
 import { downloadAuditReport } from '@/lib/auditReport';
 
@@ -11,7 +12,9 @@ const sourceLabel = (identifier = '') => {
   return 'Standards';
 };
 
-export default function DiffViewer({ manuscript, findings = [], audit, control }) {
+export default function DiffViewer({ manuscript, findings = [], audit, control, onApplyFixes }) {
+  const [applying, setApplying] = useState(false);
+
   const changes = [];
   const seen = new Set();
   findings.forEach((f) => {
@@ -24,6 +27,16 @@ export default function DiffViewer({ manuscript, findings = [], audit, control }
   });
 
   const revisionBody = manuscript?.revision_text || manuscript?.manuscript_text || '';
+
+  const applyAll = async () => {
+    if (!onApplyFixes || applying) return;
+    setApplying(true);
+    try {
+      await onApplyFixes(changes);
+    } finally {
+      setApplying(false);
+    }
+  };
 
   return (
     <section className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
@@ -45,8 +58,7 @@ export default function DiffViewer({ manuscript, findings = [], audit, control }
       <div className="max-h-[300px] overflow-y-auto">
         {changes.length === 0 && (
           <p className="p-5 text-[12.5px] leading-relaxed text-muted-foreground">
-            No automatic revisions are staged for this paper. Review the suggested corrections above, or run a new
-            review after editing.
+            No automatic revisions are staged for this paper. Review the suggested corrections above, ask Guardian Co-Pilot to rewrite specific sections, or run a new review after editing.
           </p>
         )}
         {changes.map((c) => (
@@ -63,7 +75,17 @@ export default function DiffViewer({ manuscript, findings = [], audit, control }
         ))}
       </div>
 
-      <div className="flex flex-wrap gap-2 p-4">
+      <div className="flex flex-wrap gap-2 border-t border-border/60 p-4">
+        {onApplyFixes && changes.length > 0 && (
+          <button
+            onClick={applyAll}
+            disabled={applying || !revisionBody}
+            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[11.5px] font-medium text-accent-foreground hover:opacity-90 disabled:opacity-40"
+          >
+            {applying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+            Apply safe fixes &amp; re-review
+          </button>
+        )}
         <button
           onClick={() => downloadTrackedDocx({ title: manuscript?.title, body: revisionBody, changes })}
           disabled={!revisionBody}

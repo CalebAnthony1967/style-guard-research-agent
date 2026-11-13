@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { base44 } from '@/api/base44Client';
 import { Loader2 } from 'lucide-react';
+import { db } from '@/lib/db';
 import { useAuth } from '@/lib/AuthContext';
 import { useToast } from '@/components/ui/use-toast';
 import PortalGuard from '@/components/PortalGuard';
@@ -23,13 +23,16 @@ function DepartmentDesk() {
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
-    const query = { stage: { $in: ['DRAFT_SUBMITTED', 'CONCEPT_PRESENTED_DEPT', 'DRAFT_PRESENTED_DEPT'] } };
-    if (dept) query.department = dept;
-    const page = await base44.entities.Manuscript.filter(query, { sort: '-updated_date', limit: 40 });
-    const list = page?.items || [];
-    setItems(list);
-    setSelectedId((prev) => (list.some((m) => m.id === prev) ? prev : list[0]?.id || null));
-    setLoading(false);
+    try {
+      const list = await db.manuscripts.filterByStages(
+        ['DRAFT_SUBMITTED', 'CONCEPT_PRESENTED_DEPT', 'DRAFT_PRESENTED_DEPT'],
+        { department: dept || undefined, limit: 40 },
+      );
+      setItems(list);
+      setSelectedId((prev) => (list.some((m) => m.id === prev) ? prev : list[0]?.id || null));
+    } finally {
+      setLoading(false);
+    }
   }, [dept]);
 
   useEffect(() => { load(); }, [load]);

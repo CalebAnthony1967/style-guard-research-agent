@@ -1,4 +1,4 @@
-import { base44 } from '@/api/base44Client';
+import { apiFetch, db } from '@/lib/db';
 import { sha256 } from '@/lib/hash';
 import { logEvent } from '@/lib/auditLog';
 
@@ -366,112 +366,125 @@ export async function runGuardianAudit(manuscript, user) {
 
   const reviewStart = Date.now();
   try {
-    const llm = await base44.integrations.Core.InvokeLLM({
-      prompt: `You are Guardian, the compliance reasoner for the Kenya Institute for Public Policy Research and Analysis (KIPPRA). Evaluate this ${manuscript.paper_type} titled "${manuscript.title}" against the nine qualities of public policy (Effectiveness, Efficiency, Equity, Inclusiveness, Responsiveness, Sustainability, Feasibility, Coherence, Accountability) and PP/06/2020.
-
-Deterministic findings (authoritative — do not contradict them):
-${digest}
-
-Citation parity: ${JSON.stringify(lint.citationParity)}
-Horizon gaps: ${JSON.stringify(lint.horizonGaps)}
-TOR output gaps: ${JSON.stringify(lint.outputGaps)}
-Scores: house style ${lint.houseScore}, policy rigour ${lint.rigorScore}, output alignment ${lint.outputScore}, overall ${lint.overall}.
-
-Manuscript extract:
-"""${text.slice(0, 6500)}"""
-
-Score each of the nine qualities 0-100 with one sentence of evidence from the extract. Write a 120-word executive summary for the Head of Department and up to five priority actions. Never invent facts.`,
-      response_json_schema: {
-        type: 'object',
-        properties: {
-          qualities: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                quality: { type: 'string' },
-                score: { type: 'number' },
-                rationale: { type: 'string' },
-              },
-              required: ['quality', 'score', 'rationale'],
-            },
-          },
-          executive_summary: { type: 'string' },
-          priority_actions: { type: 'array', items: { type: 'string' } },
+    const llm = await apiFetch('/api/ai/evaluate', {
+      method: 'POST',
+      body: {
+        title: manuscript.title,
+        paper_type: manuscript.paper_type,
+        text: text.slice(0, 6500),
+        digest,
+        citationParity: lint.citationParity,
+        horizonGaps: lint.horizonGaps,
+        outputGaps: lint.outputGaps,
+        scores: {
+          houseScore: lint.houseScore,
+          rigorScore: lint.rigorScore,
+          outputScore: lint.outputScore,
+          overall: lint.overall,
         },
-        required: ['qualities', 'executive_summary'],
       },
     });
     if (llm?.qualities?.length) qualities = llm.qualities;
     if (llm?.executive_summary) executive_summary = llm.executive_summary;
-    if (Array.isArray(llm?.priority_actions) && llm.priority_actions.length) priority_actions = llm.priority_actions;
-    trace.push({ agent: 'Review Agent', status: 'COMPLETED', summary: 'Synthesised the nine-qualities profile and executive summary.', duration_ms: Date.now() - reviewStart });
+    if (Array.isArray(llm?.priority_actions) && llm.priority_actions.length) {
+      priority_actions = llm.priority_actions;
+    }
+    trace.push({
+      agent: 'Review Agent',
+      status: 'COMPLETED',
+      summary: `Synthesised the nine-qualities profile and executive summary${
+        llm?.retrieved_rules?.length ? ` (${llm.retrieved_rules.length} KB rules retrieved)` : ''
+      }.`,
+      duration_ms: Date.now() - reviewStart,
+    });
   } catch (err) {
-    trace.push({ agent: 'Review Agent', status: 'DEGRADED', summary: `Reasoner unavailable (${err.message}); deterministic scores and findings stand.`, duration_ms: Date.now() - reviewStart });
+    trace.push({
+      agent: 'Review Agent',
+      status: 'DEGRADED',
+      summary: `Reasoner unavailable (${err.message}); deterministic scores and findings stand.`,
+      duration_ms: Date.now() - reviewStart,
+    });
   }
 
   trace.push({
     agent: 'Review Agent',
     status: 'COMPLETED',
-    summary: `Overall ${lint.overall}%. ${lint.overall >= 80 && lint.critical === 0 ? 'Quality gate passed — routing to HOD is unlocked.' : 'Quality gate holds until critical findings are resolved.'}`,
+    summary: `Overall ${lint.overall}%. ${
+      lint.overall >= 80 && lint.critical === 0
+        ? 'Quality gate passed — routing to HOD is unlocked.'
+        : 'Quality gate holds until critical findings are resolved.'
+    }`,
     duration_ms: 1,
   });
 
-  const audit = await base44.entities.ComplianceAudit.create({
-    manuscript_id: manuscript.id,
-    version_number: 1,
-    overall_score: lint.overall,
-    house_style_score: lint.houseScore,
-    policy_rigor_score: lint.rigorScore,
-    output_alignment_score: lint.outputScore,
-    audit_status: 'COMPLETED',
-    can_route_to_hod: lint.overall >= 80 && lint.critical === 0,
-    executive_summary,
-    priority_actions: priority_actions.slice(0, 5),
-    qualities,
-    citation_parity: lint.citationParity,
-    agent_trace: trace,
-    findings_total: lint.findings.length,
-    findings_critical: lint.critical,
-    findings_warning: lint.warning,
-    word_count: text.split(/\s+/).filter(Boolean).length,
-    inference_engine: 'Guardian editorial assistant',
-    executed_by_email: user?.email || manuscript.owner_email,
-  });
+  const existingVersions = await db.versions.listForDocument(manuscript.id, { limit: 50 }).catch(() => []);
+  const nextVersionNumber = (existingVersions?.[0]?.version_number || existingVersions?.length || 0) + 1;
+  const versionHash = await sha256(revision.text || text);
+  const createdVersion = await db.versions.create(
+    {
+      manuscript_id: manuscript.id,
+      version_number: nextVersionNumber,
+      version_hash_sha256: versionHash,
+      storage_path: manuscript.file_uri || '',
+      s3_storage_uri: manuscript.file_uri || '',
+      text_snapshot: revision.text.slice(0, 150000),
+      change_summary: `${revision.applied.length} suggested revisions prepared for the author`,
+      created_by_email: user?.email || manuscript.owner_email,
+    },
+    user?.id,
+  );
+
+  const audit = await db.audits.create(
+    {
+      manuscript_id: manuscript.id,
+      version_id: createdVersion?.id || null,
+      version_number: nextVersionNumber,
+      overall_score: lint.overall,
+      house_style_score: lint.houseScore,
+      policy_rigor_score: lint.rigorScore,
+      output_alignment_score: lint.outputScore,
+      audit_status: 'COMPLETED',
+      can_route_to_hod: lint.overall >= 80 && lint.critical === 0,
+      executive_summary,
+      priority_actions: priority_actions.slice(0, 5),
+      qualities,
+      citation_parity: lint.citationParity,
+      agent_trace: trace,
+      findings_total: lint.findings.length,
+      findings_critical: lint.critical,
+      findings_warning: lint.warning,
+      word_count: text.split(/\s+/).filter(Boolean).length,
+      inference_engine: 'Guardian editorial assistant',
+      executed_by_email: user?.email || manuscript.owner_email,
+    },
+    user?.id,
+  );
 
   if (lint.findings.length) {
-    await base44.entities.ComplianceFinding.bulkCreate(
+    await db.findings.bulkCreate(
       lint.findings.map((f) => ({ ...f, audit_id: audit.id, manuscript_id: manuscript.id })),
     );
   }
 
-  const versionHash = await sha256(revision.text || text);
-  const versions = await base44.entities.ManuscriptVersion.list({ sort: '-version_number', limit: 50 });
-  await base44.entities.ManuscriptVersion.create({
-    manuscript_id: manuscript.id,
-    version_number: (versions?.items?.length || 0) + 1,
-    version_hash_sha256: versionHash,
-    text_snapshot: revision.text.slice(0, 150000),
-    change_summary: `${revision.applied.length} suggested revisions prepared for the author`,
-    created_by_email: user?.email || manuscript.owner_email,
-  });
-
   const canRoute = lint.overall >= 80 && lint.critical === 0;
-  await base44.entities.Manuscript.update(manuscript.id, {
+  await db.manuscripts.update(manuscript.id, {
     latest_score: lint.overall,
     latest_audit_id: audit.id,
     can_route_to_hod: canRoute,
     revision_text: revision.text,
   });
 
-  const controls = await base44.entities.QmsControl.filter({ manuscript_id: manuscript.id }, { limit: 1 });
-  if (!controls?.items?.length) {
-    await base44.entities.QmsControl.create({
-      manuscript_id: manuscript.id,
-      form_ref_no: 'KIPPRA/QMS/RPC/2023/03',
-      revision_no: 3,
-      current_stage: manuscript.stage || 'DRAFT_SUBMITTED',
-    });
+  const existingControl = await db.qmsControl.getByManuscript(manuscript.id).catch(() => null);
+  if (!existingControl) {
+    await db.qmsControl.create(
+      {
+        manuscript_id: manuscript.id,
+        form_ref_no: 'KIPPRA/QMS/RPC/2023/03',
+        revision_no: 3,
+        current_stage: manuscript.stage || 'DRAFT_SUBMITTED',
+      },
+      user?.id,
+    );
   }
 
   await logEvent({
@@ -479,7 +492,13 @@ Score each of the nine qualities 0-100 with one sentence of evidence from the ex
     user,
     manuscriptId: manuscript.id,
     summary: `Guardian review scored the paper ${lint.overall}% with ${lint.findings.length} issues raised`,
-    details: { audit_id: audit.id, overall_score: lint.overall, critical: lint.critical, warning: lint.warning, findings: lint.findings.length },
+    details: {
+      audit_id: audit.id,
+      overall_score: lint.overall,
+      critical: lint.critical,
+      warning: lint.warning,
+      findings: lint.findings.length,
+    },
   });
 
   return { audit, lint, revision, elapsed: Date.now() - started };

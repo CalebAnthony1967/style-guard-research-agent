@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { base44 } from '@/api/base44Client';
 import { Loader2, Printer } from 'lucide-react';
+import { db } from '@/lib/db';
 import { useAuth } from '@/lib/AuthContext';
 import { useToast } from '@/components/ui/use-toast';
 import { Input } from '@/components/ui/input';
@@ -35,18 +35,23 @@ function ProductionDesk() {
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
-    const page = await base44.entities.Manuscript.filter(
-      {
-        stage: {
-          $in: ['KM_RECEIVED', 'EDITORIAL_FIRST_TYPESETTING', 'EDITORIAL_SECOND_REVIEW', 'AUTHOR_FEEDBACK_CYCLE', 'FINAL_CORRECTIONS_INCORPORATED', 'PRINTING_REQUISITIONED'],
-        },
-      },
-      { sort: '-updated_date', limit: 30 },
-    );
-    const list = page?.items || [];
-    setItems(list);
-    setSelectedId((prev) => (list.some((m) => m.id === prev) ? prev : list[0]?.id || null));
-    setLoading(false);
+    try {
+      const list = await db.manuscripts.filterByStages(
+        [
+          'KM_RECEIVED',
+          'EDITORIAL_FIRST_TYPESETTING',
+          'EDITORIAL_SECOND_REVIEW',
+          'AUTHOR_FEEDBACK_CYCLE',
+          'FINAL_CORRECTIONS_INCORPORATED',
+          'PRINTING_REQUISITIONED',
+        ],
+        { limit: 30 },
+      );
+      setItems(list);
+      setSelectedId((prev) => (list.some((m) => m.id === prev) ? prev : list[0]?.id || null));
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -160,12 +165,26 @@ function ProductionDesk() {
           ) : (
             <>
               <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
-                <p className="eyebrow">In production</p>
-                <h2 className="mt-1 text-xl text-foreground">{manuscript.title}</h2>
-                <p className="mt-1 text-[12px] text-muted-foreground">
-                  {manuscript.paper_type} · {stageLabel(manuscript.stage)}
-                  {control?.repository_handle ? ` · ${control.repository_handle}` : ''}
-                </p>
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <p className="eyebrow">In production · Both Research Directorates</p>
+                    <h2 className="mt-1 text-xl text-foreground">{manuscript.title}</h2>
+                    <p className="mt-1 text-[12px] text-muted-foreground">
+                      {manuscript.paper_type} · {stageLabel(manuscript.stage)}
+                      {control?.repository_handle ? ` · ${control.repository_handle}` : ''}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 text-[11px]">
+                    <span className="rounded-md bg-secondary px-2 py-0.5 font-medium text-foreground">
+                      Origin: {manuscript.department || 'Unassigned'}
+                    </span>
+                    {manuscript.directorate && (
+                      <span className="rounded-md border border-border px-2 py-0.5 text-muted-foreground">
+                        {manuscript.directorate}
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
 
               <section className="rounded-xl border border-border bg-card p-5 shadow-sm">

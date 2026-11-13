@@ -1,6 +1,20 @@
 import { useCallback, useEffect, useState } from 'react';
-import { base44 } from '@/api/base44Client';
-import { Eye, Fingerprint, KeyRound, Loader2, ShieldCheck, ShieldX } from 'lucide-react';
+import {
+  Activity,
+  Download,
+  Eye,
+  Fingerprint,
+  KeyRound,
+  Loader2,
+  Lock,
+  Scale,
+  ShieldAlert,
+  ShieldCheck,
+  ShieldX,
+  Sparkles,
+  Users,
+} from 'lucide-react';
+import { apiFetch, db } from '@/lib/db';
 import { useAuth } from '@/lib/AuthContext';
 import { useToast } from '@/components/ui/use-toast';
 import { Input } from '@/components/ui/input';
@@ -10,6 +24,7 @@ import PortalGuard from '@/components/PortalGuard';
 import PageHeader from '@/components/guardian/PageHeader';
 import { issueKeyShares, loadSessions, loadShares, openBreakGlass } from '@/lib/vault';
 import { verifyAuditChain } from '@/lib/auditLog';
+import { ROLE_LABEL } from '@/lib/portals';
 
 const WEIGHTS = [
   { label: 'House Style Compliance', weight: '45%', detail: 'Layout, spelling, tables, citations' },
@@ -43,6 +58,9 @@ function VaultSuite() {
   const [bias, setBias] = useState([]);
   const [shares, setShares] = useState([]);
   const [sessions, setSessions] = useState([]);
+  const [telemetry, setTelemetry] = useState(null);
+  const [sweepReport, setSweepReport] = useState(null);
+  const [sweeping, setSweeping] = useState(false);
   const [codes, setCodes] = useState(['', '', '']);
   const [reason, setReason] = useState('');
   const [issued, setIssued] = useState([]);
@@ -52,29 +70,43 @@ function VaultSuite() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [auditPage, biasPage, shareList, sessionList] = await Promise.all([
-      base44.entities.ComplianceAudit.list({ sort: '-created_date', limit: 12 }).catch(() => ({ items: [] })),
-      base44.entities.ComplianceFinding.filter({ rule_identifier: 'KIPPRA-HS-BIAS-02' }, { sort: '-created_date', limit: 40 }).catch(() => ({ items: [] })),
+    const [list, biasList, shareList, sessionList, ethicsRes] = await Promise.all([
+      db.audits.list({ limit: 12 }).catch(() => []),
+      db.findings.filterByRule('KIPPRA-HS-BIAS-02', { limit: 40 }).catch(() => []),
       loadShares().catch(() => []),
       loadSessions().catch(() => []),
+      apiFetch('/api/vault/ethics-report').catch(() => null),
     ]);
-    const list = auditPage?.items || [];
     setAudits(list);
     setSelectedAudit((prev) => (list.some((a) => a.id === prev) ? prev : list[0]?.id || null));
-    setBias(biasPage?.items || []);
+    setBias(biasList);
     setShares(shareList);
     setSessions(sessionList);
+    setTelemetry(ethicsRes);
     setLoading(false);
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+  }, [load]);
 
   useEffect(() => {
-    if (!selectedAudit) { setFindings([]); return; }
+    if (!selectedAudit) {
+      setFindings([]);
+      return;
+    }
     let alive = true;
-    base44.entities.ComplianceFinding.filter({ audit_id: selectedAudit }, { sort: '-created_date', limit: 60 })
-      .then((p) => { if (alive) setFindings(p?.items || []); });
-    return () => { alive = false; };
+    db.findings
+      .filterByAudit(selectedAudit, { limit: 60 })
+      .then((list) => {
+        if (alive) setFindings(list || []);
+      })
+      .catch(() => {
+        if (alive) setFindings([]);
+      });
+    return () => {
+      alive = false;
+    };
   }, [selectedAudit]);
 
   const audit = audits.find((a) => a.id === selectedAudit) || null;
@@ -85,7 +117,10 @@ function VaultSuite() {
       const fresh = await issueKeyShares(user);
       setIssued(fresh);
       await load();
-      toast({ title: 'Emergency access codes issued', description: 'Record the three codes now. Only their fingerprints are kept.' });
+      toast({
+        title: 'Emergency access codes issued',
+        description: 'Record the three codes now. Only their fingerprints are kept.',
+      });
     } catch (err) {
       toast({ variant: 'destructive', title: 'Codes could not be issued', description: err.message });
     } finally {
@@ -100,9 +135,25 @@ function VaultSuite() {
       setCodes(['', '', '']);
       setReason('');
       await load();
-      toast({ title: 'Emergency session opened', description: `Closes at ${new Date(session.expires_at).toLocaleTimeString()}` });
+      toast({
+        title: 'Emergency session opened',
+        description: `Closes at ${new Date(session.expires_at).toLocaleTimeString()}`,
+      });
     } catch (err) {
       toast({ variant: 'destructive', title: 'The session was refused', description: err.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const closeSession = async (sessionId) => {
+    setBusy(true);
+    try {
+      await apiFetch(`/api/vault/break-glass/${sessionId}/close`, { method: 'POST', body: {} });
+      toast({ title: 'Session closed', description: 'Emergency break-glass access revoked early.' });
+      await load();
+    } catch (err) {
+      toast({ variant: 'destructive', title: 'Could not close session', description: err.message });
     } finally {
       setBusy(false);
     }
@@ -124,20 +175,82 @@ function VaultSuite() {
     }
   };
 
+  const runEthicsSweep = async () => {
+    setSweeping(true);
+    try {
+      const freshTelemetry = telemetry || (await apiFetch('/api/vault/ethics-report').catch(() => ({})));
+      const report = await apiFetch('/api/vault/ethics-sweep', {
+        method: 'POST',
+        body: { metrics: freshTelemetry },
+      });
+      setSweepReport(report);
+      toast({
+        title: 'AI Ethics & Security sweep complete',
+        description: `Verdict: ${report.verdict || 'VERIFIED'}`,
+      });
+    } catch (err) {
+      toast({ variant: 'destructive', title: 'Ethics sweep failed', description: err.message });
+    } finally {
+      setSweeping(false);
+    }
+  };
+
+  const exportLedger = async () => {
+    setBusy(true);
+    try {
+      const result = chain || (await verifyAuditChain());
+      if (!chain) setChain(result);
+      const bundle = {
+        exported_at: new Date().toISOString(),
+        exported_by: user?.email,
+        chain_verified: result.verified,
+        total_entries: result.total,
+        telemetry,
+        sweep_report: sweepReport,
+        records: result.records,
+      };
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `kippra-ethics-ledger-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({ title: 'Verified ledger exported', description: 'JSON governance package downloaded.' });
+    } catch (err) {
+      toast({ variant: 'destructive', title: 'Export failed', description: err.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const activeShareCount = shares.filter((s) => s.is_active).length;
 
   return (
     <>
       <PageHeader
-        eyebrow="AI ethics & explainability"
+        eyebrow="AI ethics &amp; security governance"
         title="Governance vault"
-        description="Why every score was given, which language was flagged, and who approved what. No change can be made without two custodians."
+        description="Free, fair, safe, secure, and transparent oversight: inspect scoring parity across directorates, monitor data privacy, verify human sign-offs, and enforce two-custodian custody."
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={runEthicsSweep} disabled={sweeping} className="text-[12.5px]">
+              {sweeping ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1.5 h-3.5 w-3.5" />}
+              Run AI Ethics Sweep
+            </Button>
+            <Button size="sm" variant="outline" onClick={exportLedger} disabled={busy} className="text-[12.5px]">
+              <Download className="mr-1.5 h-3.5 w-3.5" /> Export Verified Ledger
+            </Button>
+          </div>
+        }
       />
 
-      <div className="mt-6 grid gap-4 sm:grid-cols-3">
+      <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         {[
           ['Reviews indexed', audits.length],
           ['Language flags', bias.length],
+          ['Directorate spread', telemetry ? `${telemetry.maxSpread ?? 0} pts` : '—'],
+          ['PII safety alerts', telemetry ? telemetry.piiAlerts?.length ?? 0 : '—'],
           ['Emergency codes active', `${activeShareCount} of 3`],
         ].map(([label, value]) => (
           <div key={label} className="rounded-xl border border-border bg-card p-4 shadow-sm">
@@ -146,6 +259,136 @@ function VaultSuite() {
           </div>
         ))}
       </div>
+
+      {sweepReport && (
+        <section className="mt-6 rounded-xl border border-primary/30 bg-card p-5 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
+            <div>
+              <p className="eyebrow flex items-center gap-1.5">
+                <ShieldCheck className="h-3.5 w-3.5 text-primary" /> Certification Verdict
+              </p>
+              <h2 className="mt-0.5 text-lg text-foreground">{sweepReport.verdict?.replace(/_/g, ' ')}</h2>
+            </div>
+            <div className="flex gap-3 text-[12px]">
+              <span className="rounded-lg bg-secondary/70 px-3 py-1.5 font-medium tabular">
+                Fairness: <strong>{sweepReport.fairness_score}%</strong>
+              </span>
+              <span className="rounded-lg bg-secondary/70 px-3 py-1.5 font-medium tabular">
+                Safety: <strong>{sweepReport.safety_score}%</strong>
+              </span>
+              <span className="rounded-lg bg-secondary/70 px-3 py-1.5 font-medium tabular">
+                Transparency: <strong>{sweepReport.transparency_score}%</strong>
+              </span>
+            </div>
+          </div>
+          <p className="mt-3 text-[12.5px] leading-relaxed text-muted-foreground">{sweepReport.summary}</p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            {(sweepReport.checks || []).map((c, idx) => (
+              <div key={`${c.pillar}-${idx}`} className="rounded-lg border border-border/70 bg-secondary/30 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[12px] font-semibold text-foreground">{c.pillar}</span>
+                  <span
+                    className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${
+                      c.status === 'PASS'
+                        ? 'bg-primary/10 text-primary'
+                        : 'bg-amber-500/15 text-amber-800 dark:text-amber-300'
+                    }`}
+                  >
+                    {c.status}
+                  </span>
+                </div>
+                <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted-foreground">{c.detail}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {telemetry && (
+        <div className="mt-6 grid gap-6 lg:grid-cols-3">
+          <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
+            <p className="eyebrow flex items-center gap-1.5"><Scale className="h-3.5 w-3.5" /> Fairness parity</p>
+            <h2 className="mt-1 text-base font-medium text-foreground">Scoring across research directorates</h2>
+            <p className="mt-1 text-[11.5px] text-muted-foreground">
+              Identical deterministic weights apply to both Research Directorates. Target spread ≤ 15 pts.
+            </p>
+            <ul className="mt-3 space-y-2">
+              {(telemetry.parity || []).map((p) => (
+                <li key={p.directorate} className="rounded-lg border border-border/60 bg-secondary/30 p-3">
+                  <div className="flex items-center justify-between text-[12px]">
+                    <span className="font-medium text-foreground">{p.directorate}</span>
+                    <span className="font-mono font-semibold text-primary tabular">
+                      {p.meanScore != null ? `${p.meanScore}%` : '—'}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    {p.papers} audited · {p.passRate != null ? `${p.passRate}% ≥ 80% threshold` : 'no scored drafts yet'}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
+            <p className="eyebrow flex items-center gap-1.5"><Lock className="h-3.5 w-3.5" /> Data safety &amp; privacy</p>
+            <h2 className="mt-1 text-base font-medium text-foreground">PII &amp; human sign-off check</h2>
+            <div className="mt-3 space-y-2.5">
+              <div className="rounded-lg border border-border/60 bg-secondary/30 p-3">
+                <div className="flex items-center justify-between text-[12px]">
+                  <span className="font-medium text-foreground">Human-in-the-loop sign-off integrity</span>
+                  <span className="font-mono text-[11px] font-semibold text-primary">
+                    {telemetry.unverifiedTransitions === 0 ? '100% signed' : `${telemetry.unverifiedTransitions} unverified`}
+                  </span>
+                </div>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  No stage advance is permitted without an explicit named human officer and rank.
+                </p>
+              </div>
+              {telemetry.piiAlerts?.length === 0 ? (
+                <div className="flex items-start gap-2 rounded-lg border border-primary/20 bg-primary/5 p-3 text-[12px] text-foreground">
+                  <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                  <span>No unredacted Kenyan phone numbers, National IDs, or financial identifiers found across stored manuscripts.</span>
+                </div>
+              ) : (
+                <ul className="max-h-[150px] space-y-1.5 overflow-y-auto">
+                  {telemetry.piiAlerts.map((alert) => (
+                    <li key={alert.id} className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-[11.5px]">
+                      <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-700" />
+                      <div>
+                        <p className="font-medium text-foreground">{alert.title}</p>
+                        <p className="text-muted-foreground">{alert.department} · {alert.flags.join(', ')}</p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </section>
+
+          <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
+            <p className="eyebrow flex items-center gap-1.5"><Users className="h-3.5 w-3.5" /> Security transparency</p>
+            <h2 className="mt-1 text-base font-medium text-foreground">Privileged signatory officers</h2>
+            <p className="mt-1 text-[11.5px] text-muted-foreground">
+              {telemetry.activeOfficers} active · {telemetry.suspendedOfficers} suspended across the Institute
+            </p>
+            <ul className="mt-3 max-h-[200px] space-y-1.5 overflow-y-auto">
+              {(telemetry.privilegedOfficers || []).slice(0, 12).map((officer) => (
+                <li key={officer.id} className="flex items-center justify-between rounded-lg border border-border/60 bg-secondary/30 px-3 py-2 text-[11.5px]">
+                  <div className="min-w-0 pr-2">
+                    <p className="truncate font-medium text-foreground">{officer.full_name || officer.email}</p>
+                    <p className="truncate text-[10.5px] text-muted-foreground">
+                      {ROLE_LABEL[officer.role] || officer.role} {officer.department ? `· ${officer.department}` : ''}
+                    </p>
+                  </div>
+                  <span className={`shrink-0 text-[10px] font-semibold uppercase ${officer.is_active === false ? 'text-destructive' : 'text-primary'}`}>
+                    {officer.is_active === false ? 'suspended' : 'active'}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        </div>
+      )}
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <section className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
@@ -158,7 +401,9 @@ function VaultSuite() {
                   key={a.id}
                   onClick={() => setSelectedAudit(a.id)}
                   className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${
-                    selectedAudit === a.id ? 'border-primary bg-primary text-primary-foreground' : 'border-border text-muted-foreground hover:text-foreground'
+                    selectedAudit === a.id
+                      ? 'border-primary bg-primary text-primary-foreground'
+                      : 'border-border text-muted-foreground hover:text-foreground'
                   }`}
                 >
                   {Math.round(a.overall_score)}%
@@ -280,10 +525,24 @@ function VaultSuite() {
             </Button>
 
             {sessions.length > 0 && (
-              <ul className="mt-3 space-y-1 text-[11px] text-muted-foreground">
-                {sessions.slice(0, 3).map((s) => (
-                  <li key={s.id}>
-                    {actionText(s.status)} · {s.shares_verified} codes · closes {s.expires_at ? new Date(s.expires_at).toLocaleString() : '—'}
+              <ul className="mt-3 space-y-1.5 text-[11px] text-muted-foreground">
+                {sessions.slice(0, 4).map((s) => (
+                  <li key={s.id} className="flex items-center justify-between gap-2 rounded border border-border/50 px-2.5 py-1.5">
+                    <span>
+                      {actionText(s.status)} · {s.shares_verified} codes · closes{' '}
+                      {s.expires_at ? new Date(s.expires_at).toLocaleString() : '—'}
+                    </span>
+                    {s.status === 'OPEN' && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => closeSession(s.id)}
+                        disabled={busy}
+                        className="h-6 px-2 text-[10.5px] text-destructive"
+                      >
+                        Close early
+                      </Button>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -295,7 +554,7 @@ function VaultSuite() {
       <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-5">
           <div>
-            <p className="eyebrow">Activity log</p>
+            <p className="eyebrow flex items-center gap-1.5"><Activity className="h-3.5 w-3.5" /> Activity log</p>
             <h2 className="mt-1 text-lg text-foreground">Every review and approval, in order</h2>
           </div>
           <Button size="sm" variant="outline" onClick={verify} disabled={busy} className="text-[12px]">

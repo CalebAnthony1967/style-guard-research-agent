@@ -9,6 +9,7 @@ import {
   Settings,
   LockKeyhole,
 } from 'lucide-react';
+import { firstNameOf, twoNamesOf } from '@/lib/orgChart';
 
 export const PAPER_TYPES = [
   'Discussion Paper',
@@ -150,13 +151,16 @@ export const setPreviewRole = (role) => {
 };
 
 /**
- * Reads the KIPPRA office from a user record. Handles both the flat and
- * `data`-nested shapes that the platform can return for custom User fields.
+ * Reads the KIPPRA office from a user record. Supports Supabase public.users.role
+ * directly as well as kippra_role/data fields.
  */
-export const roleOf = (user) =>
-  user?.data?.kippra_role ||
-  user?.kippra_role ||
-  (user?.role === 'admin' ? 'ADMIN' : 'RESEARCHER');
+export const roleOf = (user) => {
+  const direct = user?.data?.kippra_role || user?.kippra_role || user?.role;
+  if (!direct) return 'RESEARCHER';
+  if (direct === 'admin') return 'ADMIN';
+  if (PORTALS.some((p) => p.role === direct)) return direct;
+  return 'RESEARCHER';
+};
 
 export const portalForRole = (role) =>
   PORTALS.find((p) => p.role === role) || PORTALS[0];
@@ -164,7 +168,7 @@ export const portalForRole = (role) =>
 export const canOpenPortal = (user, role) =>
   roleOf(user) === role ||
   getPreviewRole() === role ||
-  user?.role === 'admin' ||
+  roleOf(user) === 'ADMIN' ||
   roleOf(user) === 'SUPER_ADMIN_VAULT';
 
 export const stageIndex = (key) => STAGES.findIndex((s) => s.key === key);
@@ -175,4 +179,19 @@ export const officeTitle = (user) => {
   const office = ROLE_LABEL[roleOf(user)] || 'Researcher';
   const unit = user?.data?.department || user?.department || user?.data?.directorate || user?.directorate;
   return unit ? `${office} · ${unit}` : office;
+};
+
+export const loggedInLabel = (user) => {
+  const first = firstNameOf(user);
+  const rank = ROLE_LABEL[roleOf(user)] || 'Researcher';
+  const dept = user?.data?.department || user?.department || user?.data?.directorate || user?.directorate;
+  return dept ? `Logged in: ${first} · ${rank} (${dept})` : `Logged in: ${first} · ${rank}`;
+};
+
+export const formalSignature = (user, overrideRole) => {
+  const names = twoNamesOf(user);
+  const role = overrideRole || roleOf(user);
+  const rank = ROLE_LABEL[role] || 'Officer';
+  const unit = user?.data?.department || user?.department || user?.data?.directorate || user?.directorate;
+  return unit ? `${names} — ${rank} (${unit})` : `${names} — ${rank}`;
 };

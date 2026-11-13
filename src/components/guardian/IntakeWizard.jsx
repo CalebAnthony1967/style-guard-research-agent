@@ -1,392 +1,455 @@
--- ==============================================================================
--- KIPPRA STYLEGUARD: PRODUCTION DDL MIGRATION
--- ==============================================================================
+import { useState } from 'react';
+import { CheckCircle2, FileText, Loader2, Plus, Sparkles, Upload } from 'lucide-react';
+import { db } from '@/lib/db';
+import { sha256 } from '@/lib/hash';
+import { logEvent } from '@/lib/auditLog';
+import { runGuardianAudit } from '@/lib/auditEngine';
+import { PAPER_TYPES } from '@/lib/portals';
+import {
+  RESEARCH_DIRECTORATES,
+  canonicalDepartmentName,
+  departmentsForDirectorate,
+  directorateForDepartment,
+} from '@/lib/orgChart';
+import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 
--- 1. EXTENSIONS
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
-CREATE EXTENSION IF NOT EXISTS "vector";
+const STEPS = ['Sandbox upload & scan', 'Series & details', 'Outputs & TOR'];
 
--- 2. USERS & CLEARANCES
-CREATE TABLE IF NOT EXISTS public.users (
-    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-    email VARCHAR(255) UNIQUE NOT NULL,
-    full_name VARCHAR(255) NOT NULL,
-    role VARCHAR(50) NOT NULL CHECK (role IN (
-        'RESEARCHER', 'HOD', 'DIRECTOR', 'SEMINAR_PANEL',
-        'EXECUTIVE_DIRECTOR', 'DEPUTY_DIRECTOR_KM', 'PUBLICATIONS_EDITOR',
-        'ADMIN', 'SUPER_ADMIN_VAULT'
-    )),
-    directorate VARCHAR(150) NOT NULL,
-    department VARCHAR(150) NOT NULL,
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+export default function IntakeWizard({ user, onCreated }) {
+  const [open, setOpen] = useState(false);
+  const [step, setStep] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [scanningTor, setScanningTor] = useState(false);
+  const [scanSummary, setScanSummary] = useState(null);
+  const [error, setError] = useState('');
+  const [file, setFile] = useState(null);
+  const [torFile, setTorFile] = useState(null);
+  const defaultDept = canonicalDepartmentName(user?.data?.department || user?.department || RESEARCH_DIRECTORATES[0].departments[0]);
+  const defaultDir = directorateForDepartment(defaultDept) || user?.data?.directorate || user?.directorate || RESEARCH_DIRECTORATES[0].name;
+  const [form, setForm] = useState({
+    paper_type: 'Discussion Paper',
+    title: '',
+    abstract: '',
+    directorate: defaultDir,
+    department: defaultDept,
+    manuscript_text: '',
+    expected_outputs: '',
+    tor_text: '',
+  });
 
--- 3. DOCUMENTS TABLE
-CREATE TABLE IF NOT EXISTS public.documents (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE RESTRICT,
-    title VARCHAR(500) NOT NULL,
-    paper_type VARCHAR(100) NOT NULL CHECK (paper_type IN (
-        'Discussion Paper', 'Kenya Economic Report', 'Policy Brief', 'Policy Monitor',
-        'Special Paper', 'Policy Memoranda', 'Policy Paper', 'Working Paper',
-        'Research Paper', 'Occasional Paper', 'Media Article'
-    )),
-    original_filename VARCHAR(255) NOT NULL,
-    mime_type VARCHAR(100) NOT NULL,
-    storage_path VARCHAR(1024) NOT NULL,
-    file_hash_sha256 CHAR(64) NOT NULL,
-    expected_research_outputs TEXT NOT NULL,
-    tor_storage_path VARCHAR(1024),
-    allowed_roles VARCHAR[] DEFAULT '{"RESEARCHER", "HOD", "DIRECTOR", "ADMIN"}',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+  const setField = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
 
--- 4. DOCUMENT VERSIONS (OPTIMISTIC CONCURRENCY CONTROL)
-CREATE TABLE IF NOT EXISTS public.document_versions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    document_id UUID NOT NULL REFERENCES public.documents(id) ON DELETE CASCADE,
-    version_number INT NOT NULL,
-    version_hash_sha256 CHAR(64) NOT NULL,
-    storage_path VARCHAR(1024) NOT NULL,
-    diff_ast_patch JSONB,
-    change_summary TEXT,
-    created_by UUID NOT NULL REFERENCES public.users(id),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT uq_doc_version UNIQUE (document_id, version_number)
-);
+  const reset = () => {
+    setForm({
+      paper_type: 'Discussion Paper',
+      title: '',
+      abstract: '',
+      directorate: user?.data?.directorate || user?.directorate || '',
+      department: user?.data?.department || user?.department || '',
+      manuscript_text: '',
+      expected_outputs: '',
+      tor_text: '',
+    });
+    setFile(null);
+    setTorFile(null);
+    setScanSummary(null);
+    setStep(0);
+    setError('');
+  };
 
--- 5. QMS CONTROL LIFECYCLE (KIPPRA/QMS/RPC/2023/03 Revision 3)
-CREATE TABLE IF NOT EXISTS public.qms_publication_control (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    document_id UUID NOT NULL REFERENCES public.documents(id) ON DELETE CASCADE,
-    form_ref_no VARCHAR(100) DEFAULT 'KIPPRA/QMS/RPC/2023/03',
-    revision_no INT DEFAULT 3,
-    current_stage VARCHAR(100) NOT NULL CHECK (current_stage IN (
-        'DRAFT_SUBMITTED', 'CONCEPT_PRESENTED_DEPT', 'DRAFT_PRESENTED_DEPT',
-        'DIRECTOR_REVIEW_COMPLETED', 'WIS_SCHEDULED', 'WIS_COMPLETED',
-        'DECISION_COMMUNICATED', 'EXECUTIVE_DIRECTOR_AUTHORIZED',
-        'KM_RECEIVED', 'EDITORIAL_FIRST_TYPESETTING', 'EDITORIAL_SECOND_REVIEW',
-        'AUTHOR_FEEDBACK_CYCLE', 'FINAL_CORRECTIONS_INCORPORATED', 'PRINTING_REQUISITIONED'
-    )),
-    concept_presentation_date DATE,
-    concept_hod_signoff_user UUID REFERENCES public.users(id),
-    concept_hod_signed_at TIMESTAMP WITH TIME ZONE,
-    draft_presentation_date DATE,
-    draft_hod_signoff_user UUID REFERENCES public.users(id),
-    draft_hod_signed_at TIMESTAMP WITH TIME ZONE,
-    director_receipt_date DATE,
-    director_review_completed_date DATE,
-    director_signoff_user UUID REFERENCES public.users(id),
-    director_signed_at TIMESTAMP WITH TIME ZONE,
-    wis_presentation_date DATE,
-    wis_director_signoff_user UUID REFERENCES public.users(id),
-    wis_panel_decision VARCHAR(50) CHECK (wis_panel_decision IN (
-        'SUBMIT_FOR_PUBLICATION', 
-        'REVISE_SUBMIT_MINOR', 
-        'REVISE_REPRESENT_MAJOR'
-    )),
-    decision_communicated_date DATE,
-    ed_authorization_date DATE,
-    ed_signoff_user UUID REFERENCES public.users(id),
-    km_receipt_date DATE,
-    km_signoff_user UUID REFERENCES public.users(id),
-    typesetting_commenced DATE,
-    typesetting_completed DATE,
-    typesetting_conducted_by VARCHAR(255),
-    editorial_comments_sent_date DATE,
-    editorial_feedback_received_date DATE,
-    final_corrections_incorporated_date DATE,
-    printing_requisition_date DATE,
-    is_fully_completed BOOLEAN DEFAULT FALSE,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+  const handleManuscriptSelect = async (picked) => {
+    setFile(picked);
+    setError('');
+    if (!picked) return;
+    setScanning(true);
+    try {
+      const scanned = await db.storage.scanDocument(picked, {
+        kind: 'manuscript',
+        fallbackDirectorate: form.directorate || user?.directorate || '',
+        fallbackDepartment: form.department || user?.department || '',
+      });
+      setForm((prev) => {
+        const matchedDept = canonicalDepartmentName(scanned.department || prev.department);
+        const matchedDir = directorateForDepartment(matchedDept) || scanned.directorate || prev.directorate;
+        return {
+          ...prev,
+          paper_type: scanned.paper_type || prev.paper_type,
+          title: scanned.title || prev.title,
+          abstract: scanned.abstract || prev.abstract,
+          directorate: matchedDir,
+          department: matchedDept,
+          manuscript_text: scanned.manuscript_text || prev.manuscript_text,
+          expected_outputs: scanned.expected_outputs || prev.expected_outputs,
+          tor_text: scanned.tor_text || prev.tor_text,
+        };
+      });
+      setScanSummary({
+        words: scanned.word_count || 0,
+        sections: scanned.detected_sections || [],
+      });
+    } catch (err) {
+      setError(`Scan warning: ${err.message}. You can still edit the extracted text manually.`);
+    } finally {
+      setScanning(false);
+    }
+  };
 
--- 6. HYBRID KNOWLEDGE BASE (1536-DIM VECTOR FOR HNSW + BM25)
-CREATE TABLE IF NOT EXISTS public.kippra_knowledge_base (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    source_type VARCHAR(100) NOT NULL,
-    source_uri VARCHAR(1024) NOT NULL,
-    section_category VARCHAR(100) NOT NULL,
-    rule_identifier VARCHAR(100) NOT NULL,
-    rule_title VARCHAR(255) NOT NULL,
-    rule_content TEXT NOT NULL,
-    applicable_paper_types VARCHAR[] NOT NULL,
-    allowed_roles VARCHAR[] DEFAULT '{"ALL"}',
-    embedding vector(1536), -- Truncated MRL text-embedding-3-large or text-embedding-3-small
-    tsv_content tsvector,
-    metadata JSONB,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+  const handleTorSelect = async (picked) => {
+    setTorFile(picked);
+    setError('');
+    if (!picked) return;
+    setScanningTor(true);
+    try {
+      const scanned = await db.storage.scanDocument(picked, { kind: 'tor' });
+      setForm((prev) => ({
+        ...prev,
+        expected_outputs: scanned.expected_outputs || prev.expected_outputs,
+        tor_text: scanned.tor_text || prev.tor_text,
+      }));
+    } catch (err) {
+      setError(`TOR scan warning: ${err.message}`);
+    } finally {
+      setScanningTor(false);
+    }
+  };
 
--- Ensure tsvector is automatically updated on insert/update
-CREATE OR REPLACE FUNCTION kippra_kb_tsv_update() RETURNS trigger AS $$
-BEGIN
-    new.tsv_content := to_tsvector('english', coalesce(new.rule_title, '') || ' ' || coalesce(new.rule_content, ''));
-    RETURN new;
-END
-$$ LANGUAGE plpgsql;
+  const wordCount = form.manuscript_text.trim() ? form.manuscript_text.trim().split(/\s+/).length : 0;
 
-CREATE OR REPLACE TRIGGER trg_kippra_kb_tsv
-BEFORE INSERT OR UPDATE ON public.kippra_knowledge_base
-FOR EACH ROW EXECUTE FUNCTION kippra_kb_tsv_update();
+  const canNext =
+    step === 0
+      ? form.manuscript_text.trim().length >= 200 && !scanning
+      : step === 1
+        ? form.title.trim().length > 6 && Boolean(form.paper_type)
+        : true;
 
-CREATE INDEX IF NOT EXISTS idx_kb_embedding ON public.kippra_knowledge_base USING hnsw (embedding vector_cosine_ops);
-CREATE INDEX IF NOT EXISTS idx_kb_tsv ON public.kippra_knowledge_base USING gin (tsv_content);
-CREATE INDEX IF NOT EXISTS idx_kb_paper_types ON public.kippra_knowledge_base USING gin (applicable_paper_types);
+  const submit = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      let fileUri = '';
+      if (file) {
+        fileUri = await db.storage.uploadManuscriptFile(file);
+      }
+      let torFileUri = '';
+      if (torFile) {
+        torFileUri = await db.storage.uploadTorFile(torFile);
+      }
 
--- 7. COMPLIANCE AUDITS & FINDINGS
-CREATE TABLE IF NOT EXISTS public.compliance_audits (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    document_id UUID NOT NULL REFERENCES public.documents(id) ON DELETE CASCADE,
-    version_id UUID NOT NULL REFERENCES public.document_versions(id) ON DELETE CASCADE,
-    overall_score NUMERIC(5, 2) NOT NULL,
-    house_style_score NUMERIC(5, 2) NOT NULL,
-    policy_rigor_score NUMERIC(5, 2) NOT NULL,
-    output_alignment_score NUMERIC(5, 2) NOT NULL,
-    audit_status VARCHAR(50) NOT NULL CHECK (audit_status IN ('QUEUED', 'PROCESSING', 'COMPLETED', 'FAILED')),
-    can_route_to_hod BOOLEAN DEFAULT FALSE,
-    executive_summary TEXT,
-    executed_by UUID NOT NULL REFERENCES public.users(id),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+      const fileHash = await sha256(form.manuscript_text);
+      const { manuscript } = await db.manuscripts.intake({
+        title: form.title.trim() || file?.name?.replace(/\.[^.]+$/, '') || 'Untitled manuscript',
+        paper_type: form.paper_type,
+        abstract: form.abstract.trim(),
+        directorate: form.directorate.trim(),
+        department: form.department.trim(),
+        original_filename: file?.name || '',
+        mime_type: file?.type || 'application/octet-stream',
+        file_uri: fileUri,
+        tor_file_uri: torFileUri || null,
+        file_hash_sha256: fileHash,
+        manuscript_text: form.manuscript_text,
+        expected_outputs: form.expected_outputs.trim(),
+        tor_text: form.tor_text.trim(),
+        owner_name: user?.full_name || user?.email || '',
+        owner_email: user?.email || '',
+        stage: 'DRAFT_SUBMITTED',
+        status: 'IN_AUDIT',
+      });
 
-CREATE TABLE IF NOT EXISTS public.compliance_findings (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    audit_id UUID NOT NULL REFERENCES public.compliance_audits(id) ON DELETE CASCADE,
-    rule_identifier VARCHAR(100),
-    vector_category VARCHAR(50) NOT NULL CHECK (vector_category IN (
-        'LAYOUT_AND_FRONT_MATTER', 'STYLE_AND_SPELLING', 'TABLES_AND_FIGURES',
-        'CITATIONS_AND_BIBLIOGRAPHY', 'POLICY_DRAFTING_RIGOR', 'OUTPUT_ALIGNMENT'
-    )),
-    severity VARCHAR(20) NOT NULL CHECK (severity IN ('CRITICAL', 'WARNING', 'INFO')),
-    issue_detected TEXT NOT NULL,
-    original_text_excerpt TEXT,
-    suggested_correction TEXT,
-    page_number INT,
-    character_range INT[],
-    status VARCHAR(50) DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'ACCEPTED', 'REJECTED'))
-);
+      await logEvent({
+        actionType: 'MANUSCRIPT_INTAKE',
+        user,
+        manuscriptId: manuscript.id,
+        summary: `Intake accepted: ${manuscript.title}`,
+        details: {
+          paper_type: form.paper_type,
+          words: wordCount,
+          uploaded: Boolean(fileUri),
+          ai_scanned: Boolean(scanSummary),
+        },
+      });
 
--- 8. CHAT SESSIONS & MESSAGES
-CREATE TABLE IF NOT EXISTS public.chat_sessions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
-    document_id UUID REFERENCES public.documents(id) ON DELETE SET NULL,
-    current_mode VARCHAR(50) NOT NULL CHECK (current_mode IN ('GENERAL_CHAT', 'PAPER_EVALUATION', 'CO_PILOT_EDIT')),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+      await runGuardianAudit(manuscript, user);
 
-CREATE TABLE IF NOT EXISTS public.chat_messages (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    session_id UUID NOT NULL REFERENCES public.chat_sessions(id) ON DELETE CASCADE,
-    sender VARCHAR(20) NOT NULL CHECK (sender IN ('USER', 'AGENT', 'SYSTEM')),
-    content TEXT NOT NULL,
-    mcp_tool_calls JSONB,
-    ui_visualizations JSONB,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+      setOpen(false);
+      reset();
+      onCreated?.(manuscript);
+    } catch (err) {
+      setError(err.message || 'Unable to save submission');
+    } finally {
+      setBusy(false);
+    }
+  };
 
--- 9. IMMUTABLE WORM AUDIT LOGS
-CREATE TABLE IF NOT EXISTS public.system_audit_logs (
-    id BIGSERIAL PRIMARY KEY,
-    user_id UUID,
-    action_type VARCHAR(100) NOT NULL,
-    ip_address INET NOT NULL,
-    payload_hash CHAR(64) NOT NULL,
-    details JSONB NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON public.system_audit_logs(created_at);
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setError('');
+      }}
+    >
+      <DialogTrigger asChild>
+        <Button onClick={() => setOpen(true)} size="sm" className="rounded-full text-[12.5px]">
+          <Plus className="mr-1.5 h-3.5 w-3.5" /> New submission
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="font-display text-2xl">New manuscript intake</DialogTitle>
+          <DialogDescription className="text-[12.5px]">
+            Upload your manuscript and Guardian automatically extracts title, series, abstract, sections, and TOR deliverables before running the QMS KIPPRA/QMS/RPC/2023/03 audit.
+          </DialogDescription>
+        </DialogHeader>
 
--- Prevent update/delete on audit logs (True WORM compliance)
-CREATE OR REPLACE FUNCTION prevent_audit_log_mutation() RETURNS trigger AS $$
-BEGIN
-    RAISE EXCEPTION 'System audit logs are immutable and cannot be updated or deleted.';
-END;
-$$ LANGUAGE plpgsql;
+        <div className="mt-2 flex items-center gap-2">
+          {STEPS.map((label, idx) => (
+            <div key={label} className="flex flex-1 items-center gap-2">
+              <span
+                className={`flex h-6 w-6 items-center justify-center rounded-full font-mono text-[10px] ${
+                  idx <= step ? 'bg-primary text-primary-foreground' : 'bg-secondary text-muted-foreground'
+                }`}
+              >
+                {idx + 1}
+              </span>
+              <span className={`text-[11px] ${idx === step ? 'text-foreground' : 'text-muted-foreground'}`}>
+                {label}
+              </span>
+              {idx < STEPS.length - 1 && <span className="h-px flex-1 bg-border" />}
+            </div>
+          ))}
+        </div>
 
-CREATE OR REPLACE TRIGGER trg_audit_log_immutability
-BEFORE UPDATE OR DELETE ON public.system_audit_logs
-FOR EACH ROW EXECUTE FUNCTION prevent_audit_log_mutation();
+        {step === 0 && (
+          <div className="mt-4 space-y-4">
+            <div>
+              <Label className="text-[12px]">Sandbox upload (auto-scanned by Guardian)</Label>
+              <label className="mt-1.5 flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-border bg-secondary/30 px-4 py-6 text-center transition-colors hover:bg-secondary/60">
+                {scanning ? (
+                  <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                ) : (
+                  <Upload className="h-5 w-5 text-muted-foreground" />
+                )}
+                <span className="text-[12.5px] font-medium text-foreground">
+                  {scanning
+                    ? `Scanning ${file?.name || 'manuscript'}… extracting title, abstract, body & deliverables`
+                    : file
+                      ? file.name
+                      : 'Drop or choose a .docx, .pdf, .txt, .md, .xlsx, .csv or .tsv manuscript'}
+                </span>
+                <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                  stored privately · zero manual retyping needed
+                </span>
+                <input
+                  type="file"
+                  className="hidden"
+                  accept=".docx,.pdf,.txt,.md,.zip,.xlsx,.csv,.tsv"
+                  disabled={scanning}
+                  onChange={(e) => handleManuscriptSelect(e.target.files?.[0] || null)}
+                />
+              </label>
+            </div>
 
--- 10. HYBRID RETRIEVAL RPC FUNCTION
-CREATE OR REPLACE FUNCTION match_kippra_rules(
-    query_embedding vector(1536),
-    query_text text,
-    target_paper_type text,
-    match_count int
-)
-RETURNS TABLE (
-    id uuid,
-    rule_identifier varchar,
-    rule_title varchar,
-    rule_content text,
-    section_category varchar,
-    combined_score float
-)
-LANGUAGE sql STABLE AS $$
-    SELECT 
-        id, 
-        rule_identifier, 
-        rule_title, 
-        rule_content,
-        section_category,
-        ((1 - (embedding <=> query_embedding)) * 0.70 + 
-         ts_rank_cd(tsv_content, plainto_tsquery('english', query_text)) * 0.30)::float AS combined_score
-    FROM public.kippra_knowledge_base
-    WHERE applicable_paper_types @> ARRAY[target_paper_type]
-       OR applicable_paper_types @> ARRAY['ALL']
-    ORDER BY combined_score DESC
-    LIMIT match_count;
-$$;
+            {scanSummary && (
+              <div className="rounded-lg border border-primary/25 bg-accent/40 p-3 text-[12px]">
+                <p className="flex items-center gap-1.5 font-medium text-foreground">
+                  <Sparkles className="h-3.5 w-3.5 text-primary" />
+                  Guardian scanned {scanSummary.words.toLocaleString()} words and pre-filled all intake fields
+                </p>
+                {scanSummary.sections?.length > 0 && (
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Detected headings: {scanSummary.sections.slice(0, 6).join(' · ')}
+                  </p>
+                )}
+              </div>
+            )}
 
-3. ROW LEVEL SECURITY (RLS) & ACCESS CONTROL
+            <div>
+              <div className="flex items-baseline justify-between">
+                <Label htmlFor="text" className="text-[12px]">Extracted manuscript body</Label>
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  {wordCount.toLocaleString()} words · {form.manuscript_text.trim().length} chars
+                </span>
+              </div>
+              <Textarea
+                id="text"
+                rows={8}
+                value={form.manuscript_text}
+                onChange={(e) => setField('manuscript_text', e.target.value)}
+                placeholder={'Upload a manuscript above to auto-populate, or paste manuscript text directly (minimum 200 characters)…'}
+                className="mt-1.5 font-mono text-[11.5px] leading-relaxed"
+              />
+            </div>
+          </div>
+        )}
 
-Enable RLS on all tables and apply strict security boundaries:
+        {step === 1 && (
+          <div className="mt-4 space-y-4">
+            <div>
+              <Label className="text-[12px]">Publication series</Label>
+              <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+                {PAPER_TYPES.map((type) => (
+                  <button
+                    key={type}
+                    type="button"
+                    onClick={() => setField('paper_type', type)}
+                    className={`rounded-md border px-2 py-1.5 text-left text-[11.5px] transition-colors ${
+                      form.paper_type === type
+                        ? 'border-primary bg-accent text-accent-foreground'
+                        : 'border-border bg-card text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    {type}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="title" className="text-[12px]">Manuscript title</Label>
+              <Input
+                id="title"
+                value={form.title}
+                onChange={(e) => setField('title', e.target.value)}
+                placeholder="Auto-filled from document scan — review or adjust"
+                className="mt-1.5 text-[13px]"
+              />
+            </div>
+            <div>
+              <Label htmlFor="abstract" className="text-[12px]">Abstract</Label>
+              <Textarea
+                id="abstract"
+                rows={4}
+                value={form.abstract}
+                onChange={(e) => setField('abstract', e.target.value)}
+                placeholder="Auto-extracted from manuscript abstract or executive summary (~300 words)."
+                className="mt-1.5 text-[12.5px]"
+              />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <Label htmlFor="directorate" className="text-[12px]">Research Directorate of origin</Label>
+                <select
+                  id="directorate"
+                  value={form.directorate}
+                  onChange={(e) => {
+                    const nextDir = e.target.value;
+                    const list = departmentsForDirectorate(nextDir);
+                    setForm((prev) => ({
+                      ...prev,
+                      directorate: nextDir,
+                      department: list.includes(prev.department) ? prev.department : list[0] || '',
+                    }));
+                  }}
+                  className="mt-1.5 h-9 w-full rounded-md border border-input bg-card px-2.5 text-[12.5px] text-foreground"
+                >
+                  {RESEARCH_DIRECTORATES.map((d) => (
+                    <option key={d.name} value={d.name}>{d.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <Label htmlFor="department" className="text-[12px]">Department of origin</Label>
+                <select
+                  id="department"
+                  value={form.department}
+                  onChange={(e) => {
+                    const nextDept = e.target.value;
+                    const nextDir = directorateForDepartment(nextDept) || form.directorate;
+                    setForm((prev) => ({ ...prev, department: nextDept, directorate: nextDir }));
+                  }}
+                  className="mt-1.5 h-9 w-full rounded-md border border-input bg-card px-2.5 text-[12.5px] text-foreground"
+                >
+                  {departmentsForDirectorate(form.directorate).map((dept) => (
+                    <option key={dept} value={dept}>{dept}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+        )}
 
-ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.documents ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.document_versions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.qms_publication_control ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.kippra_knowledge_base ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.compliance_audits ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.compliance_findings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.chat_sessions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.chat_messages ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.system_audit_logs ENABLE ROW LEVEL SECURITY;
+        {step === 2 && (
+          <div className="mt-4 space-y-4">
+            <div>
+              <Label className="text-[12px]">Optional Terms of Reference file (auto-scanned)</Label>
+              <label className="mt-1.5 flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-secondary/30 px-3 py-3 text-[12px] hover:bg-secondary/60">
+                {scanningTor ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                ) : (
+                  <FileText className="h-4 w-4 text-muted-foreground" />
+                )}
+                <span>
+                  {scanningTor
+                    ? `Scanning ${torFile?.name}…`
+                    : torFile
+                      ? `${torFile.name} scanned`
+                      : 'Attach a TOR .docx / .pdf / .txt file to auto-extract outputs'}
+                </span>
+                <input
+                  type="file"
+                  className="hidden"
+                  accept=".docx,.pdf,.txt,.md"
+                  disabled={scanningTor}
+                  onChange={(e) => handleTorSelect(e.target.files?.[0] || null)}
+                />
+              </label>
+            </div>
+            <div>
+              <Label htmlFor="outputs" className="text-[12px]">Expected research outputs</Label>
+              <Textarea
+                id="outputs"
+                rows={4}
+                value={form.expected_outputs}
+                onChange={(e) => setField('expected_outputs', e.target.value)}
+                placeholder="One deliverable per line — pre-filled by Guardian from your paper/TOR."
+                className="mt-1.5 text-[12.5px]"
+              />
+            </div>
+            <div>
+              <Label htmlFor="tor" className="text-[12px]">Terms of reference benchmark</Label>
+              <Textarea
+                id="tor"
+                rows={3}
+                value={form.tor_text}
+                onChange={(e) => setField('tor_text', e.target.value)}
+                placeholder="TOR questions and policy question the paper must answer."
+                className="mt-1.5 text-[12.5px]"
+              />
+            </div>
+            <p className="flex items-start gap-2 rounded-lg bg-secondary/60 p-3 text-[11.5px] leading-relaxed text-muted-foreground">
+              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+              <span>
+                On submit, the manuscript enters at <span className="font-mono text-foreground">DRAFT_SUBMITTED</span> and Guardian runs the full multi-agent audit. Nothing routes to your HOD until you reach 80% with zero critical findings.
+              </span>
+            </p>
+          </div>
+        )}
 
--- Knowledge base is readable by all authenticated users
-CREATE POLICY "Allow authenticated read of KB" 
-ON public.kippra_knowledge_base FOR SELECT TO authenticated USING (true);
+        {error && <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-[12px] text-destructive">{error}</p>}
 
--- Researchers manage their own documents; Supervisors/HODs view department papers
-CREATE POLICY "Users access permitted documents" 
-ON public.documents FOR ALL TO authenticated 
-USING (
-    user_id = auth.uid() OR 
-    EXISTS (
-        SELECT 1 FROM public.users 
-        WHERE users.id = auth.uid() 
-        AND users.role IN ('HOD', 'DIRECTOR', 'SEMINAR_PANEL', 'EXECUTIVE_DIRECTOR', 'ADMIN')
-    )
-);
-
--- QMS Control Form visible to document owners and review chain
-CREATE POLICY "QMS workflow access" 
-ON public.qms_publication_control FOR ALL TO authenticated 
-USING (
-    EXISTS (
-        SELECT 1 FROM public.documents 
-        WHERE documents.id = qms_publication_control.document_id 
-        AND (documents.user_id = auth.uid() OR EXISTS (
-            SELECT 1 FROM public.users 
-            WHERE users.id = auth.uid() 
-            AND users.role IN ('HOD', 'DIRECTOR', 'SEMINAR_PANEL', 'EXECUTIVE_DIRECTOR', 'PUBLICATIONS_EDITOR', 'ADMIN')
-        ))
-    )
-);
-
--- Append-only policy for system audit logs
-CREATE POLICY "Allow system insert into audit logs" 
-ON public.system_audit_logs FOR INSERT TO authenticated WITH CHECK (true);
-
-CREATE POLICY "Allow admins to read audit logs" 
-ON public.system_audit_logs FOR SELECT TO authenticated 
-USING (
-    EXISTS (
-        SELECT 1 FROM public.users 
-        WHERE users.id = auth.uid() AND users.role IN ('ADMIN', 'SUPER_ADMIN_VAULT')
-    )
-);
-
-4. SUPABASE STORAGE BUCKETS SETUP
-
-Using the SUPABASE_SERVICE_ROLE_KEY or Supabase Storage API, programmatically
-provision the following private storage buckets:
-
-1.  manuscripts: Stores uploaded original files (.docx, .pdf, .zip, .xlsx).
-2.  revisions: Stores patched .docx files containing native Word Track Changes.
-3.  compliance-reports: Stores compiled PDF and DOCX evaluation scorecards.
-4.  tor-benchmarks: Stores uploaded terms-of-reference and expected research
-    outputs.
-5.  kippra-e-repository: Stores ingested guidelines and harvested publications.
-
--- Storage bucket initialization (via Storage schema)
-INSERT INTO storage.buckets (id, name, public) 
-VALUES 
-    ('manuscripts', 'manuscripts', false),
-    ('revisions', 'revisions', false),
-    ('compliance-reports', 'compliance-reports', false),
-    ('tor-benchmarks', 'tor-benchmarks', false),
-    ('kippra-e-repository', 'kippra-e-repository', false)
-ON CONFLICT (id) DO NOTHING;
-
-5. SEED INITIAL KNOWLEDGE BASE & TEST PROFILES
-
-Execute the following seed query to ground Guardian in KIPPRA’s core rules and
-initialize test profiles for all roles:
-
--- 1. SEED CORE RULES INTO KNOWLEDGE BASE
-INSERT INTO public.kippra_knowledge_base 
-    (source_type, source_uri, section_category, rule_identifier, rule_title, rule_content, applicable_paper_types)
-VALUES 
-    (
-        'HOUSE_STYLE_2010', 'House_Style_Manual_2010.pdf', 'STYLE_AND_SPELLING', 
-        'KIPPRA-HS-RULE-01', 'Oxford -ize Default and 31 -ise Exceptions', 
-        'KIPPRA uses British English with the Oxford -ize spelling by default (e.g., organize, standardize, utilize). However, 31 verbs retain -ise: advertise, advise, analyse, apprise, chastise, comprise, compromise, demise, despise, devise, disfranchise, disguise, enfranchise, enterprise, excise, exercise, exorcise, improvise, incise, paralyse, premise, prise, promise, raise, revise, rise, arise, supervise, surmise, surprise, televise.', 
-        ARRAY['ALL']
-    ),
-    (
-        'HOUSE_STYLE_2010', 'House_Style_Manual_2010.pdf', 'TABLES_AND_FIGURES', 
-        'KIPPRA-HS-CHECKLIST-42', 'Table Number Thousands Separators', 
-        'In tables, numbers consisting of four or more figures must use spaces instead of commas (e.g., 1 405 724 not 1,405,724). Blanks must be populated with n.a. (data not available) or – (nil/negligible).', 
-        ARRAY['ALL']
-    ),
-    (
-        'POLICY_GUIDELINES_PP062020', 'PP_06_2020.pdf', 'POLICY_DRAFTING_RIGOR', 
-        'PP062020-PRIN-03', 'Prohibition of Shall in Policy Statements', 
-        'Policy is an authoritative decision of government, not an intention or promise. Do not use "shall" in policy statements. Use active voice with "will", "must", or "is responsible for".', 
-        ARRAY['Policy Paper', 'Policy Memoranda', 'Policy Brief', 'Special Paper']
-    ),
-    (
-        'POLICY_GUIDELINES_PP062020', 'PP_06_2020.pdf', 'POLICY_DRAFTING_RIGOR', 
-        'PP062020-PRIN-08', 'Long-Range 15-Year Planning Horizon', 
-        'Public policy documents must take a long-range, futuristic perspective exceeding 15 years (e.g., Kenya Vision 2030). Scopes of 4 to 6 years define Medium-Term Development Plans (MTPs), not long-range public policies.', 
-        ARRAY['Policy Paper', 'Policy Memoranda']
-    ),
-    (
-        'POLICY_GUIDELINES_PP062020', 'PP_06_2020.pdf', 'CABINET_MEMO', 
-        'PP062020-APP-02', 'Mandatory 7-Part Cabinet Memo Structure', 
-        'Cabinet Memoranda must adhere strictly to the 7-part format: Part 1: Purpose/Objectives (For Decision vs For Information); Part 2: Background Information; Part 3: Analysis of the Problem; Part 4: Options and the Way Forward; Part 5: Financial Implications (National Treasury concurrence); Part 6: Legal Implications (Attorney General concurrence); Part 7: Request to the Cabinet.', 
-        ARRAY['Policy Memoranda']
-    )
-ON CONFLICT DO NOTHING;
-
-6. CLIENT INTEGRATION & CONNECTION HANDSHAKE
-
-In the frontend application, instantiate the Supabase client using @supabase/ssr
-or @supabase/supabase-js:
-
-// lib/supabaseClient.ts
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY!;
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
-Ensure all file uploads, intake form submissions, and QMS status transitions
-write directly to these tables. Do not use mock handlers or local storage.
-
-7. EXECUTION DIRECTIVE
-
-Connect to the remote Supabase project now. Apply the DDL migration, verify
-extension activations (uuid-ossp, pgcrypto, vector), set up storage buckets and
-RLS policies, seed the initial knowledge base rules, and verify database
-connectivity. Build a fully functioning backend integration.
-
-
-***
+        <DialogFooter className="mt-4 gap-2">
+          {step > 0 && (
+            <Button variant="outline" size="sm" onClick={() => setStep((s) => s - 1)} disabled={busy || scanning}>
+              Back
+            </Button>
+          )}
+          {step < 2 ? (
+            <Button size="sm" onClick={() => setStep((s) => s + 1)} disabled={!canNext}>
+              Continue
+            </Button>
+          ) : (
+            <Button size="sm" onClick={submit} disabled={busy || scanning || scanningTor || form.manuscript_text.trim().length < 200}>
+              {busy && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+              Accept &amp; run audit
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

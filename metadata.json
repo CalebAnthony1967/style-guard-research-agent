@@ -1,0 +1,6 @@
+{
+  "name": "KIPPRA Research Compliance & Co-Pilot System",
+  "description": "Enterprise-grade AI-powered research paper compliance evaluation, House Style (2010) auditing, policy rigor review (PP/06/2020), and inline co-pilot track-changes editor.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

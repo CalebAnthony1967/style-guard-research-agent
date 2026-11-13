@@ -3,6 +3,7 @@ import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { BookOpen, ChevronDown, FileText, Home, Inbox, LogOut, Menu, Settings, ShieldCheck, X } from 'lucide-react';
 import { useAuth } from '@/lib/AuthContext';
 import { PORTALS, roleOf, portalForRole, getPreviewRole, setPreviewRole, officeTitle, ROLE_LABEL } from '@/lib/portals';
+import { firstNameOf } from '@/lib/orgChart';
 
 const NAV = [
   { label: 'Home', to: '/', icon: Home, end: true },
@@ -101,7 +102,9 @@ export default function AppShell() {
 
       <div className="border-t border-sidebar-border px-3 py-3">
         <div className="rounded-md bg-secondary/70 px-3 py-2.5">
-          <p className="truncate text-[12.5px] font-medium text-foreground">{user?.full_name || user?.email || 'Officer'}</p>
+          <p className="truncate text-[12.5px] font-semibold text-foreground">
+            Logged in: {firstNameOf(user)}
+          </p>
           <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{officeTitle(user)}</p>
         </div>
         <button
@@ -131,7 +134,10 @@ export default function AppShell() {
             <Menu className="h-5 w-5" />
           </button>
           <Link to="/" className="text-[15px] font-semibold tracking-tight text-foreground">KIPPRA StyleGuard</Link>
-          <button className="ml-auto text-muted-foreground" onClick={() => logout()} aria-label="Sign out">
+          <span className="ml-auto truncate text-[11.5px] font-medium text-foreground">
+            Logged in: {firstNameOf(user)}
+          </span>
+          <button className="text-muted-foreground" onClick={() => logout()} aria-label="Sign out">
             <LogOut className="h-4 w-4" />
           </button>
         </div>

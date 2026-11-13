@@ -1,13 +1,16 @@
-import { base44 } from '@/api/base44Client';
+import { apiFetch, db } from '@/lib/db';
+import { logEvent } from '@/lib/auditLog';
 
 export async function ensureSession({ user, manuscriptId, mode = 'GENERAL_CHAT', title }) {
-  const page = await base44.entities.ChatSession.list({ sort: '-created_date', limit: 20 });
-  const existing = (page?.items || []).find(
-    (s) => (s.manuscript_id || '') === (manuscriptId || '') && s.mode === mode && (s.created_by_id || s.created_by) === (user?.id || s.created_by_id),
+  if (!user?.id) return null;
+  const sessions = await db.chat.listSessions({ userId: user.id, limit: 20 });
+  const existing = sessions.find(
+    (s) => (s.manuscript_id || '') === (manuscriptId || '') && s.mode === mode,
   );
   if (existing) return existing;
-  return base44.entities.ChatSession.create({
-    manuscript_id: manuscriptId || '',
+  return db.chat.createSession({
+    userId: user.id,
+    manuscriptId: manuscriptId || null,
     mode,
     title: title || 'Guardian session',
   });
@@ -15,54 +18,105 @@ export async function ensureSession({ user, manuscriptId, mode = 'GENERAL_CHAT',
 
 export async function loadMessages(sessionId) {
   if (!sessionId) return [];
-  const page = await base44.entities.ChatMessage.filter({ session_id: sessionId }, { sort: 'created_date', limit: 100 });
-  return page?.items || [];
+  return db.chat.loadMessages(sessionId);
 }
 
-/** Guardian turn: grounded in the knowledge base, the manuscript and its audit. */
-export async function askGuardian({ session, message, manuscript, audit, findings, user, role }) {
-  const [rules, messageHistory] = await Promise.all([
-    base44.entities.KnowledgeRule.list({ sort: '-updated_date', limit: 24 }),
-    loadMessages(session.id),
-  ]);
+/** Guardian turn: grounded via server-side hybrid vector+BM25 RAG and Gemini tool-enabled Co-Pilot. */
+export async function askGuardian({ session, message, manuscript, audit, findings, control, user, role }) {
+  const messageHistory = await loadMessages(session.id);
 
-  const knowledge = (rules?.items || [])
-    .map((r) => `[${r.rule_identifier}] ${r.rule_title}: ${(r.rule_content || '').slice(0, 320)}`)
+  const history = messageHistory
+    .slice(-10)
+    .map((m) => `${m.sender === 'USER' ? 'Officer' : 'Guardian'}: ${m.content}`)
     .join('\n');
 
-  const manuscriptContext = manuscript
-    ? `Manuscript: "${manuscript.title}" (${manuscript.paper_type}, stage ${manuscript.stage}).
-Expected outputs: ${(manuscript.expected_outputs || 'none supplied').slice(0, 500)}
-Latest audit: ${audit ? `${audit.overall_score}% overall; house style ${audit.house_style_score}%, policy rigour ${audit.policy_rigor_score}%, output alignment ${audit.output_alignment_score}%` : 'not yet audited'}.
-Top findings: ${(findings || []).slice(0, 10).map((f) => `[${f.severity}] ${f.rule_identifier}: ${f.issue_detected}`).join(' | ') || 'none'}.
-Extract: """${(manuscript.manuscript_text || '').slice(0, 2500)}"""`
-    : 'No manuscript is currently selected.';
-
-  const history = messageHistory.slice(-8).map((m) => `${m.sender === 'USER' ? 'Officer' : 'Guardian'}: ${m.content}`).join('\n');
-
-  await base44.entities.ChatMessage.create({ session_id: session.id, sender: 'USER', content: message });
-
-  const prompt = `You are Guardian, the compliance agent of KIPPRA StyleGuard at the Kenya Institute for Public Policy Research and Analysis. You answer with precision, cite the exact rule identifier whenever you make a compliance claim, and never invent a rule, statistic or citation. If evidence is missing, say so plainly.
-
-Knowledge base (House Style Manual 2010, PP/06/2020, QMS control form, repository):
-${knowledge || 'No rules loaded.'}
-
-${manuscriptContext}
-
-Conversation so far:
-${history || '(new conversation)'}
-
-Officer (${role}) asks: ${message}
-
-Reply in under 190 words, in markdown, addressed to the officer. Where relevant: name the rule code, quote the offending phrase, and give the correction.`;
+  await db.chat.createMessage({ sessionId: session.id, sender: 'USER', content: message });
 
   let reply;
+  let citations = [];
+  let proposedPatch = null;
+  let recommendedAction = 'NONE';
   try {
-    reply = await base44.integrations.Core.InvokeLLM({ prompt });
+    const res = await apiFetch('/api/ai/chat', {
+      method: 'POST',
+      body: {
+        message,
+        mode: session?.mode || 'CO_PILOT_EDIT',
+        manuscript: manuscript
+          ? {
+              id: manuscript.id,
+              title: manuscript.title,
+              paper_type: manuscript.paper_type,
+              stage: manuscript.stage,
+              abstract: manuscript.abstract,
+              expected_outputs: manuscript.expected_outputs,
+              tor_text: manuscript.tor_text,
+              manuscript_text: manuscript.manuscript_text,
+            }
+          : null,
+        audit: audit
+          ? {
+              overall_score: audit.overall_score,
+              house_style_score: audit.house_style_score,
+              policy_rigor_score: audit.policy_rigor_score,
+              output_alignment_score: audit.output_alignment_score,
+            }
+          : null,
+        control: control || null,
+        findings: (findings || []).slice(0, 20),
+        history,
+        role,
+      },
+    });
+    reply = res.reply;
+    citations = res.citations || [];
+    proposedPatch = res.proposed_patch || null;
+    recommendedAction = res.recommended_action || 'NONE';
   } catch (err) {
     reply = `Guardian could not reach the reasoner: ${err.message}. The deterministic findings on this page remain valid and can be exported as a scorecard.`;
   }
 
-  const agentMessage = await base44.entities.ChatMessage.create({ session_id: session.id, sender: 'AGENT', content: reply });
-  return { reply, agentMessage, history: messageHistory };
+  const agentMessage = await db.chat.createMessage({
+    sessionId: session.id,
+    sender: 'AGENT',
+    content: reply,
+  });
+
+  return {
+    reply,
+    agentMessage,
+    history: messageHistory,
+    citations,
+    proposedPatch,
+    recommendedAction,
+  };
+}
+
+export async function applyCoPilotPatch({ manuscript, patch, user }) {
+  if (!manuscript?.id || !patch?.replacement_text) {
+    throw new Error('No valid revision patch to apply.');
+  }
+  const current = manuscript.manuscript_text || '';
+  const excerpt = (patch.target_excerpt || '').trim();
+  let nextText;
+  if (excerpt && current.includes(excerpt)) {
+    nextText = current.replace(excerpt, patch.replacement_text);
+  } else {
+    nextText = `${current.trim()}\n\n${patch.replacement_text}`.trim();
+  }
+
+  const updated = await db.manuscripts.update(manuscript.id, {
+    manuscript_text: nextText,
+    revision_text: nextText,
+  });
+
+  await logEvent({
+    actionType: 'COPILOT_PATCH_APPLIED',
+    user,
+    manuscriptId: manuscript.id,
+    summary: patch.summary || `Applied Guardian Co-Pilot revision (${patch.rule_identifier || 'standards'})`,
+    details: { rule_identifier: patch.rule_identifier || '' },
+  });
+
+  return updated;
 }

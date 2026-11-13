@@ -80,6 +80,8 @@ create table if not exists public.documents (
   created_at timestamptz not null default now()
 );
 
+alter table public.documents add column if not exists storage_path varchar(1024) not null default '';
+alter table public.documents add column if not exists tor_storage_path varchar(1024);
 alter table public.documents add column if not exists stage text not null default 'DRAFT_SUBMITTED';
 alter table public.documents add column if not exists status text not null default 'DRAFT';
 alter table public.documents add column if not exists abstract text default '';
@@ -97,6 +99,14 @@ alter table public.documents add column if not exists isbn varchar(40) default '
 alter table public.documents add column if not exists revision_text text default '';
 alter table public.documents add column if not exists tor_text text default '';
 alter table public.documents add column if not exists updated_at timestamptz not null default now();
+do $$ begin
+  alter table public.documents alter column s3_storage_uri set default '';
+exception when undefined_column then null;
+end $$;
+do $$ begin
+  alter table public.documents alter column file_hash_sha256 set default '';
+exception when undefined_column then null;
+end $$;
 
 do $$
 declare c record;
@@ -131,9 +141,14 @@ create index if not exists idx_documents_department on public.documents(departme
 -- ---------------------------------------------------------------------------
 -- 3. MANUSCRIPT VERSIONS
 -- ---------------------------------------------------------------------------
+alter table public.document_versions add column if not exists storage_path varchar(1024) not null default '';
 alter table public.document_versions add column if not exists text_snapshot text default '';
 alter table public.document_versions add column if not exists created_by_email text default '';
 alter table public.document_versions alter column created_by drop not null;
+do $$ begin
+  alter table public.document_versions alter column s3_storage_uri set default '';
+exception when undefined_column then null;
+end $$;
 create unique index if not exists uq_document_version
   on public.document_versions(document_id, version_number);
 
@@ -230,6 +245,7 @@ alter table public.compliance_audits add column if not exists version_number int
 alter table public.compliance_audits alter column version_id drop not null;
 alter table public.compliance_audits alter column executed_by drop not null;
 
+alter table public.compliance_findings add column if not exists manuscript_id uuid references public.documents(id) on delete cascade;
 alter table public.compliance_findings add column if not exists rule_title text default '';
 alter table public.compliance_findings add column if not exists character_start int;
 alter table public.compliance_findings add column if not exists character_end int;
@@ -261,19 +277,21 @@ create index if not exists idx_audits_document on public.compliance_audits(docum
 alter table public.chat_sessions add column if not exists title text default 'Conversation';
 alter table public.chat_messages add column if not exists ui_visualizations jsonb not null default '[]'::jsonb;
 
-do $$ begin
-  if not exists (
-    select 1 from pg_constraint
-    where conrelid = 'public.chat_sessions'::regclass and conname = 'chat_sessions_mode_check'
-  ) then
-    alter table public.chat_sessions add constraint chat_sessions_mode_check
-      check (current_mode in ('GENERAL_CHAT','PAPER_EVALUATION','CO_PILOT_EDIT','SEMINAR_FACT_CHECK'));
-  end if;
+do $$
+declare c record;
+begin
+  for c in select conname from pg_constraint
+           where conrelid = 'public.chat_sessions'::regclass and contype = 'c'
+  loop execute format('alter table public.chat_sessions drop constraint %I', c.conname); end loop;
 end $$;
+
+alter table public.chat_sessions add constraint chat_sessions_mode_check
+  check (current_mode in ('GENERAL_CHAT','PAPER_EVALUATION','CO_PILOT_EDIT','SEMINAR_FACT_CHECK'));
 
 -- ---------------------------------------------------------------------------
 -- 8. IMMUTABLE AUDIT TRAIL (WORM)
 -- ---------------------------------------------------------------------------
+alter table public.system_audit_logs add column if not exists actor_id uuid;
 alter table public.system_audit_logs add column if not exists actor_email text default '';
 alter table public.system_audit_logs add column if not exists actor_role text default '';
 alter table public.system_audit_logs add column if not exists summary text default '';
@@ -281,6 +299,14 @@ alter table public.system_audit_logs add column if not exists prev_hash varchar(
 alter table public.system_audit_logs add column if not exists hash_input text default '';
 alter table public.system_audit_logs add column if not exists manuscript_id uuid;
 alter table public.system_audit_logs alter column ip_address drop not null;
+do $$ begin
+  alter table public.system_audit_logs alter column user_id drop not null;
+exception when undefined_column then null;
+end $$;
+do $$ begin
+  alter table public.system_audit_logs alter column payload_hash set default '';
+exception when undefined_column then null;
+end $$;
 
 create or replace function public.prevent_audit_log_mutation() returns trigger
 language plpgsql as $$
@@ -413,22 +439,22 @@ returns table (
 language sql stable as $$
   select
     kb.id,
-    kb.rule_identifier,
-    kb.rule_title,
+    kb.rule_identifier::varchar,
+    kb.rule_title::varchar,
     kb.rule_content,
-    kb.section_category,
+    kb.section_category::varchar,
     (
-      (1 - (kb.embedding <=> query_embedding)) * 0.70
-      + ts_rank_cd(kb.tsv_content, plainto_tsquery('english', query_text)) * 0.30
+      coalesce(1 - (kb.embedding <=> query_embedding), 0) * 0.70
+      + coalesce(ts_rank_cd(kb.tsv_content, plainto_tsquery('english', coalesce(query_text, ''))), 0) * 0.30
     )::float as combined_score
   from public.kippra_knowledge_base kb
-  where kb.applicable_paper_types @> array[target_paper_type]
-     or kb.applicable_paper_types @> array['ALL']
+  where kb.applicable_paper_types::text[] @> array[target_paper_type]::text[]
+     or kb.applicable_paper_types::text[] @> array['ALL']::text[]
   order by combined_score desc
   limit match_count;
 $$;
 
-grant execute on function public.match_kippra_rules(vector, text, text, int) to authenticated;
+grant execute on function public.match_kippra_rules(vector, text, text, int) to authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
 -- 13. STORAGE BUCKETS

@@ -1,6 +1,6 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { base44 } from "@/api/base44Client";
+import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,12 +9,37 @@ import AuthLayout from "@/components/AuthLayout";
 
 export default function ResetPassword() {
   const [searchParams] = useSearchParams();
-  const resetToken = searchParams.get("token");
+  const code = searchParams.get("code");
 
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    if (!supabase) return;
+    let alive = true;
+    const init = async () => {
+      if (code) {
+        await supabase.auth.exchangeCodeForSession(code).catch(() => {});
+      }
+      const { data } = await supabase.auth.getSession();
+      if (alive) setReady(Boolean(data?.session));
+    };
+    init();
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "PASSWORD_RECOVERY" || event === "SIGNED_IN") {
+        if (alive) setReady(true);
+      }
+    });
+    return () => {
+      alive = false;
+      subscription.unsubscribe();
+    };
+  }, [code]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -25,7 +50,8 @@ export default function ResetPassword() {
     }
     setLoading(true);
     try {
-      await base44.auth.resetPassword({ resetToken, newPassword });
+      const { error: updateErr } = await supabase.auth.updateUser({ password: newPassword });
+      if (updateErr) throw updateErr;
       window.location.href = "/login";
     } catch (err) {
       setError(err.message || "Failed to reset password");
@@ -34,12 +60,12 @@ export default function ResetPassword() {
     }
   };
 
-  if (!resetToken) {
+  if (!ready && !code && !window.location.hash.includes("access_token")) {
     return (
       <AuthLayout
         icon={AlertTriangle}
         title="Invalid reset link"
-        subtitle="This password reset link is missing or invalid"
+        subtitle="This password reset link is missing or expired"
         footer={
           <Link to="/forgot-password" className="text-primary font-medium hover:underline">
             Request a new link
@@ -47,7 +73,7 @@ export default function ResetPassword() {
         }
       >
         <p className="text-sm text-foreground text-center">
-          The link you used appears to be incomplete. Please request a new password reset email.
+          The link you used appears to be incomplete or expired. Please request a new password reset email.
         </p>
       </AuthLayout>
     );

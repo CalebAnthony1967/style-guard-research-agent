@@ -39,7 +39,12 @@ export default function ManuscriptQueue({ items = [], selectedId, onSelect, empt
                     <span className="rounded-full bg-brand-burgundy/10 px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.06em] text-brand-burgundy">
                       {m.paper_type}
                     </span>
-                    {m.owner_name || m.owner_email || 'author'}
+                    <span>{m.owner_name || m.owner_email || 'author'}</span>
+                    {m.department && (
+                      <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] font-medium text-foreground/80">
+                        {m.department}
+                      </span>
+                    )}
                   </p>
                 </div>
                 <div className="shrink-0 text-right">
